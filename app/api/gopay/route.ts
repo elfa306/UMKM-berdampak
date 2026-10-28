@@ -51,12 +51,11 @@ export async function POST(req: NextRequest) {
 if (req.nextUrl.searchParams.get('debug') === '1') {
   return NextResponse.json({
     debug: true,
-    titleTerbaca: Boolean(title),
-    textTerbaca: Boolean(text),
+    titleDebug: title.slice(0, 120),
+    textDebug: text.slice(0, 200),
+    isiDebug: isi.slice(0, 300),
     nominalDiText: /Rp\.?\s*([\d.,]+)/i.test(text),
     nominalDiGabungan: /Rp\.?\s*([\d.,]+)/i.test(isi),
-    kataUangMasuk: MASUK.test(isi),
-    nominalTerbaca: parseRupiah(isi),
   });
 }
 
