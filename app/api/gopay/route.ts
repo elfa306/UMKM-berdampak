@@ -47,6 +47,18 @@ export async function POST(req: NextRequest) {
     title = String(j.title ?? ''); text = String(j.text ?? ''); ts = String(j.ts ?? '');
   } catch { /* bukan JSON: pakai teks mentah */ }
   const isi = `${title} ${text}`.trim();
+// Pemeriksaan sementara: tidak menyimpan transaksi
+if (req.nextUrl.searchParams.get('debug') === '1') {
+  return NextResponse.json({
+    debug: true,
+    titleTerbaca: Boolean(title),
+    textTerbaca: Boolean(text),
+    nominalDiText: /Rp\.?\s*([\d.,]+)/i.test(text),
+    nominalDiGabungan: /Rp\.?\s*([\d.,]+)/i.test(isi),
+    kataUangMasuk: MASUK.test(isi),
+    nominalTerbaca: parseRupiah(isi),
+  });
+}
 
   if (!MASUK.test(isi) || BUKAN.test(isi)) return NextResponse.json({ ok: true, diabaikan: 'bukan uang masuk' });
   const jumlah = parseRupiah(isi);
