@@ -6,7 +6,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // Ambil nominal dari teks notifikasi, mis. "Rp15.000", "Rp 15.000,00", "Rp. 1.250.000"
-export function parseRupiah(text: string): number | null {
+function parseRupiah(text: string): number | null {
   const m = text.match(/Rp\.?\s*([\d.,]+)/i);
   if (!m) return null;
   let s = m[1].replace(/[.,]+$/, '');
