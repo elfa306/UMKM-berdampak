@@ -20,24 +20,35 @@ function parseRupiah(text: string): number | null {
 const MASUK = /(terima|diterima|masuk|berhasil)/i;
 const BUKAN = /(tarik|penarikan|gagal|refund|dikembalikan|dibatalkan|promo|voucher)/i;
 
-function tokenOk(got: string | null, expected: string) {
-  if (!got) return false;
-  const a = crypto.createHash('sha256').update(got).digest();
-  const b = crypto.createHash('sha256').update(expected).digest();
-  return crypto.timingSafeEqual(a, b);
+const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest();
+
+function sama(a: string, b: string) {
+  return crypto.timingSafeEqual(sha256(a), sha256(b));
 }
 
 export async function POST(req: NextRequest) {
-  const token = process.env.GOPAY_WEBHOOK_TOKEN;
-  const userId = process.env.OWNER_USER_ID;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!token || !userId || !url || !key) {
+  if (!url || !key) {
     return NextResponse.json({ error: 'Konfigurasi server belum lengkap' }, { status: 500 });
   }
-  if (!tokenOk(req.headers.get('x-webhook-token'), token)) {
-    return NextResponse.json({ error: 'Token tidak valid' }, { status: 401 });
+
+  const got = req.headers.get('x-webhook-token');
+  if (!got) return NextResponse.json({ error: 'Token tidak valid' }, { status: 401 });
+
+  const sb = createClient(url, key, { auth: { persistSession: false } });
+
+  // Cari pemilik token: (1) token per akun di tabel webhook_tokens, (2) cadangan: token lama di env (akun pertama)
+  let userId: string | null = null;
+  const hash = sha256(got).toString('hex');
+  const { data: row } = await sb.from('webhook_tokens').select('user_id').eq('token_hash', hash).maybeSingle();
+  if (row) userId = row.user_id;
+  else {
+    const envToken = process.env.GOPAY_WEBHOOK_TOKEN;
+    const envUser = process.env.OWNER_USER_ID;
+    if (envToken && envUser && sama(got, envToken)) userId = envUser;
   }
+  if (!userId) return NextResponse.json({ error: 'Token tidak valid' }, { status: 401 });
 
   // MacroDroid bisa mengirim JSON {title,text,ts} ATAU teks mentah; dua-duanya diterima.
   const raw = await req.text();
@@ -45,19 +56,15 @@ export async function POST(req: NextRequest) {
   try {
     const j = JSON.parse(raw);
     title = String(j.title ?? ''); text = String(j.text ?? ''); ts = String(j.ts ?? '');
-  } catch { /* bukan JSON: pakai teks mentah */ }
+  } catch {
+    // Bukan JSON valid (mis. teks notifikasi mengandung tanda kutip atau baris baru).
+    // Coba ambil field title/text/ts dengan pola; kalau tidak cocok, pakai teks mentah.
+    const mT = raw.match(/"title"\s*:\s*"([\s\S]*?)"\s*,\s*"text"\s*:/);
+    const mX = raw.match(/"text"\s*:\s*"([\s\S]*?)"\s*,\s*"ts"\s*:/);
+    const mS = raw.match(/"ts"\s*:\s*"?([^"}\s,]*)"?\s*}?\s*$/);
+    if (mX) { title = mT ? mT[1] : ''; text = mX[1]; ts = mS ? mS[1] : ''; }
+  }
   const isi = `${title} ${text}`.trim();
-// Pemeriksaan sementara: tidak menyimpan transaksi
-if (req.nextUrl.searchParams.get('debug') === '1') {
-  return NextResponse.json({
-    debug: true,
-    titleDebug: title.slice(0, 120),
-    textDebug: text.slice(0, 200),
-    isiDebug: isi.slice(0, 300),
-    nominalDiText: /Rp\.?\s*([\d.,]+)/i.test(text),
-    nominalDiGabungan: /Rp\.?\s*([\d.,]+)/i.test(isi),
-  });
-}
 
   if (!MASUK.test(isi) || BUKAN.test(isi)) return NextResponse.json({ ok: true, diabaikan: 'bukan uang masuk' });
   const jumlah = parseRupiah(isi);
@@ -68,7 +75,6 @@ if (req.nextUrl.searchParams.get('debug') === '1') {
   const bucket = ts || String(Math.floor(Date.now() / 60000));
   const mutationId = 'gopay:' + crypto.createHash('sha1').update(`${isi}|${bucket}`).digest('hex');
 
-  const sb = createClient(url, key, { auth: { persistSession: false } });
   const { data: baru, error } = await sb.from('qris_inbox')
     .upsert([{ user_id: userId, mutation_id: mutationId, jumlah, catatan: title.slice(0, 80) || 'GoPay Merchant' }],
       { onConflict: 'user_id,mutation_id', ignoreDuplicates: true })

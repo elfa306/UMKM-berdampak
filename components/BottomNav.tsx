@@ -7,6 +7,7 @@ const items = [
   { href: '/riwayat', ico: '🕘', label: 'Riwayat' },
   { href: '/statistik', ico: '📊', label: 'Statistik' },
   { href: '/harga', ico: '🛒', label: 'Harga' },
+  { href: '/integrasi', ico: '🔗', label: 'QRIS' },
 ];
 
 export default function BottomNav() {
