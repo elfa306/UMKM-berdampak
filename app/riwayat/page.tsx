@@ -1,10 +1,13 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { fetchHari, type Hari } from '@/lib/data';
-import { exportExcel } from '@/lib/exportExcel';
-import { labaLabel, rupiah, summarize, tglPendek } from '@/lib/accounting';
+import { exportExcel, exportExcelPeriode } from '@/lib/exportExcel';
+import { exportPdf } from '@/lib/exportPdf';
+import { ISTILAH } from '@/lib/istilah';
+import { Press } from '@/components/Motion';
+import { labaLabel, rupiah, rupiahTanda, summarize, tglPendek } from '@/lib/accounting';
 import BottomNav from '@/components/BottomNav';
 import PeriodFilter, { preset, type Periode } from '@/components/PeriodFilter';
 
@@ -20,6 +23,7 @@ export default function Riwayat() {
   const [nama, setNama] = useState('Usaha Saya');
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  const areaRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -55,18 +59,22 @@ export default function Riwayat() {
   }
 
   return (
-    <div className="wrap">
+    <div className="wrap" ref={areaRef}>
       <div className="header-app"><h1>Riwayat <span>Harian</span></h1><p>Rekap setiap hari berjualan</p></div>
       <div className="balance-card">
-        <small>Laba bersih periode</small>
+        <small>{ISTILAH.labaBersih} periode</small>
         <h2 className={totalLaba < 0 ? 'neg' : 'pos'}>{rupiah(totalLaba)}</h2>
         <div className="stat3" style={{ gridTemplateColumns: 'repeat(2,1fr)' }}>
-          <div><b>{rupiah(totalPend)}</b><span>Pendapatan</span></div>
+          <div><b>{rupiah(totalPend)}</b><span>{ISTILAH.pendapatan}</span></div>
           <div><b>{hari.length} hari</b><span>Berjualan</span></div>
         </div>
       </div>
 
       <PeriodFilter value={periode} onChange={setPeriode} />
+      <div className="row" data-html2canvas-ignore style={{ gap: 8 }}>
+        <Press className="btn-soft" disabled={!hari.length} onClick={() => exportExcelPeriode({ namaUsaha: nama, start: periode.start, end: periode.end, hari })}>📗 Excel periode</Press>
+        <Press className="btn-soft" disabled={!hari.length} onClick={() => areaRef.current && exportPdf(areaRef.current, `Riwayat-${periode.start}_sd_${periode.end}.pdf`, `${nama} · Riwayat ${periode.start} s.d. ${periode.end}`)}>📄 PDF untuk bank</Press>
+      </div>
       <input placeholder="🔍 Cari tanggal, produk, nominal..." value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
       {err && <p className="err">{err}</p>}
       {loading && <p className="muted" style={{ textAlign: 'center' }}>Memuat…</p>}
@@ -77,7 +85,7 @@ export default function Riwayat() {
           <button className="day-head" onClick={() => setOpen(open === h.id ? null : h.id)}>
             <div>
               <div className="fw" style={{ fontSize: '.9rem' }}>{tglPendek(h.tanggal)}</div>
-              <div className="muted">{h.txs.length} transaksi · Pendapatan {rupiah(s.pendapatan)}</div>
+              <div className="muted">{h.txs.length} transaksi · Uang masuk {rupiah(s.pendapatan)}</div>
             </div>
             <div className="right">
               <div className={`fw ${s.labaBersih < 0 ? 'neg' : 'pos'}`}>{rupiah(s.labaBersih)}</div>
@@ -88,22 +96,26 @@ export default function Riwayat() {
           {open === h.id && (
             <>
               <div>
-                <div className="line"><span>Modal (HPP)</span><span>{rupiah(s.hpp)}</span></div>
-                <div className="line"><span>Penjualan tunai</span><span>{rupiah(s.tunai)}</span></div>
-                <div className="line"><span>Penjualan QRIS</span><span>{rupiah(s.qris)}</span></div>
-                <div className="line"><span>Beban operasional</span><span>{rupiah(s.beban)}</span></div>
+                <div className="line"><span>{ISTILAH.modal}</span><span>{rupiah(s.hpp)}</span></div>
+                <div className="line"><span>{ISTILAH.tunai}</span><span>{rupiah(s.tunai)}</span></div>
+                <div className="line"><span>{ISTILAH.qris}</span><span>{rupiah(s.qris)}</span></div>
+                <div className="line"><span>{ISTILAH.bebanKet}</span><span>{rupiah(s.beban)}</span></div>
               </div>
-              {[...h.txs].reverse().map((t) => (
-                <div key={t.id} className="trx" style={{ borderLeftColor: t.jenis === 'penjualan' ? '#10b981' : '#ef4444' }}>
-                  <div className="grow">
-                    <b>{t.keterangan}</b>
-                    <div className="muted">{t.metode ? t.metode.toUpperCase() : 'Beban'} · {new Date(t.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' })}</div>
+              {[...h.txs].reverse().map((t) => {
+                const masuk = t.jenis === 'penjualan';
+                return (
+                  <div key={t.id} className="mut">
+                    <div className={`mut-ico ${masuk ? 'in' : 'out'}`}>{masuk ? '↓' : '↑'}</div>
+                    <div className="grow">
+                      <b>{t.keterangan}</b>
+                      <div className="muted">{t.metode ? t.metode.toUpperCase() : 'Biaya'} · {new Date(t.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' })}</div>
+                    </div>
+                    <div className={`mut-amt ${masuk ? 'in' : 'out'}`}>{rupiahTanda(t.jumlah, masuk)}</div>
+                    <button className="x-btn" data-html2canvas-ignore aria-label="Hapus" onClick={() => hapus(t.id)}>✕</button>
                   </div>
-                  <div className={`amt ${t.jenis === 'penjualan' ? 'pos' : 'neg'}`}>{t.jenis === 'penjualan' ? '+' : '-'} {rupiah(t.jumlah)}</div>
-                  <button className="x-btn" aria-label="Hapus" onClick={() => hapus(t.id)}>✕</button>
-                </div>
-              ))}
-              <button className="btn-main" onClick={() => exportExcel({ namaUsaha: nama, tanggal: h.tanggal, modal: h.modal, txs: h.txs })}>
+                );
+              })}
+              <button className="btn-main" data-html2canvas-ignore onClick={() => exportExcel({ namaUsaha: nama, tanggal: h.tanggal, modal: h.modal, txs: h.txs })}>
                 UNDUH EXCEL HARI INI
               </button>
             </>

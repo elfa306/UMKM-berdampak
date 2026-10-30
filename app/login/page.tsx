@@ -25,7 +25,7 @@ export default function Login() {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) return setErr(error.message);
     }
-    router.replace('/');
+    router.replace('/kasir');
   }
 
   return (

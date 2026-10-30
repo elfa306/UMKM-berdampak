@@ -2,18 +2,27 @@
   "name": "umkm-kasir",
   "version": "0.1.0",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "start": "next start" },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "exceljs": "^4.4.0",
+    "framer-motion": "^12.43.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
     "next": "^15.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "recharts": "^2.15.4"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.5.0"
   }
 }

@@ -1,9 +1,13 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { fetchHari, type Hari } from '@/lib/data';
 import { PALET, rupiah, summarize } from '@/lib/accounting';
+import { exportPdf } from '@/lib/exportPdf';
+import { ISTILAH } from '@/lib/istilah';
+import { Press } from '@/components/Motion';
+import TrenChart from '@/components/TrenChart';
 import BottomNav from '@/components/BottomNav';
 import Donut from '@/components/Donut';
 import PeriodFilter, { preset, type Periode } from '@/components/PeriodFilter';
@@ -14,10 +18,13 @@ export default function Statistik() {
   const [jenis, setJenis] = useState<'penjualan' | 'biaya'>('penjualan');
   const [hari, setHari] = useState<Hari[]>([]);
   const [err, setErr] = useState('');
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [nama, setNama] = useState('Usaha Saya');
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { router.replace('/login'); return; }
+    setNama(user.user_metadata?.nama_usaha ?? 'Usaha Saya');
     try { setHari(await fetchHari(periode.start, periode.end)); setErr(''); }
     catch (e) { setErr((e as Error).message); }
   }, [periode, router]);
@@ -40,23 +47,21 @@ export default function Statistik() {
       laba: ringkas.reduce((a, r) => a + r.s.labaBersih, 0),
       untung: ringkas.filter((r) => r.s.labaBersih > 0).length,
       rugi: ringkas.filter((r) => r.s.labaBersih < 0).length,
-      tren: [...ringkas].reverse().slice(-30).map((r) => ({ t: r.h.tanggal, v: r.s.labaBersih })),
+      tren: [...ringkas].reverse().slice(-90).map((r) => ({ tanggal: r.h.tanggal, uangMasuk: r.s.pendapatan, untung: r.s.labaBersih })),
     };
   }, [hari, jenis]);
 
-  const maxAbs = Math.max(1, ...st.tren.map((d) => Math.abs(d.v)));
-  const bw = st.tren.length ? 300 / st.tren.length : 10;
   const pQris = st.tunai + st.qris > 0 ? Math.round((st.qris / (st.tunai + st.qris)) * 100) : 0;
 
   return (
-    <div className="wrap">
+    <div className="wrap" ref={areaRef}>
       <div className="header-app"><h1>Statistik <span>Usaha</span></h1><p>Ringkasan penjualan, biaya, dan laba</p></div>
       <div className="balance-card">
-        <small>Laba bersih periode</small>
+        <small>{ISTILAH.labaBersih} periode</small>
         <h2 className={st.laba < 0 ? 'neg' : 'pos'}>{rupiah(st.laba)}</h2>
         <div className="stat3" style={{ gridTemplateColumns: 'repeat(2,1fr)' }}>
-          <div><b>{st.untung} hari</b><span>Untung</span></div>
-          <div><b>{st.rugi} hari</b><span>Rugi</span></div>
+          <div><b>{st.untung} hari</b><span>Hari untung</span></div>
+          <div><b>{st.rugi} hari</b><span>Hari rugi</span></div>
         </div>
       </div>
 
@@ -64,8 +69,8 @@ export default function Statistik() {
       {err && <p className="err">{err}</p>}
 
       <div className="toggle-stats">
-        <button className={jenis === 'penjualan' ? 'active' : ''} onClick={() => setJenis('penjualan')}>Penjualan</button>
-        <button className={jenis === 'biaya' ? 'active' : ''} onClick={() => setJenis('biaya')}>Biaya</button>
+        <button className={jenis === 'penjualan' ? 'active' : ''} onClick={() => setJenis('penjualan')}>Jualan</button>
+        <button className={jenis === 'biaya' ? 'active' : ''} onClick={() => setJenis('biaya')}>Belanja &amp; Biaya</button>
       </div>
 
       <div className="glass-card">
@@ -95,20 +100,13 @@ export default function Statistik() {
       </div>
 
       <div className="glass-card">
-        <span className="label">Tren laba harian (maks. 30 hari)</span>
-        {st.tren.length === 0 ? <p className="muted">Belum ada data</p> : (
-          <>
-            <svg viewBox="0 0 300 130" style={{ width: '100%' }}>
-              <line x1="0" y1="65" x2="300" y2="65" stroke="#e2e8f0" />
-              {st.tren.map((d, i) => {
-                const h = (Math.abs(d.v) / maxAbs) * 60;
-                return <rect key={d.t} x={i * bw + 1} width={Math.max(bw - 2, 1)} y={d.v >= 0 ? 65 - h : 65} height={Math.max(h, 1)} rx="2" fill={d.v >= 0 ? '#10b981' : '#ef4444'} />;
-              })}
-            </svg>
-            <div className="row muted"><span>{st.tren[0].t}</span><span>{st.tren[st.tren.length - 1].t}</span></div>
-          </>
-        )}
+        <span className="label">Tren uang masuk &amp; untung harian</span>
+        <TrenChart data={st.tren} />
+        <p className="muted" style={{ margin: 0 }}>Garis biru: uang masuk. Batang hijau: untung. Batang merah: rugi.</p>
       </div>
+      <Press className="btn-main" data-html2canvas-ignore onClick={() => areaRef.current && exportPdf(areaRef.current, `Statistik-${periode.start}_sd_${periode.end}.pdf`, `${nama} · Statistik ${periode.start} s.d. ${periode.end}`)}>
+        📄 CETAK PDF UNTUK BANK
+      </Press>
       <BottomNav />
     </div>
   );
