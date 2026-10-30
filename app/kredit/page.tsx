@@ -1,16 +1,22 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import { AnimatePresence, animate, motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, Sparkles, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react';
 import BottomNav from '@/components/BottomNav';
+import { supabase } from '@/lib/supabase';
+import { fetchHari } from '@/lib/data';
+import { todayISO } from '@/lib/accounting';
+import { BI_RATE } from '@/lib/config';
+import { buatProfilRekomendasi, type ProfilRekomendasi } from '@/lib/rekomendasiProfile';
 
 /* =====================================================================
- * 1. MOCK DATA & LOGIKA  (otaknya)
+ * 1. DATA SIMULASI LEMBAGA & LOGIKA (otaknya)
  * ===================================================================== */
 
-// Basis suku bunga (makro). Nanti bisa diganti BI_RATE dari lib/config.ts.
-const currentBiRate = 6.0;
+// Basis suku bunga (makro), mengikuti konfigurasi aplikasi.
+const currentBiRate = BI_RATE;
 
 // Bunga <= batas ini diwarnai hijau (murah), di atasnya merah (mahal).
 const BATAS_BUNGA_MURAH = 8;
@@ -35,17 +41,7 @@ type Bank = {
   risiko: Risiko;
 };
 
-const mockProfil = {
-  nama: 'Warung Bu Sari',
-  omzetHarian: 300_000,
-  marginUntung: 0.3, // 30%
-  hariBukaPerBulan: 26,
-  usiaUsahaBulan: 18,
-  hariDicatat30: 28, // hari tercatat dari 30 hari terakhir
-  fluktuasiOmzet: 0.25, // naik-turun omzet harian (0 = stabil sekali)
-  kebutuhanModal: 10_000_000,
-};
-type Profil = typeof mockProfil;
+type Profil = ProfilRekomendasi;
 
 const mockBanks: Bank[] = [
   {
@@ -352,10 +348,123 @@ function KartuBank({ r, urutan, terbuka, onToggle, profil }: {
 }
 
 /* ---------- Halaman ---------- */
+function rentang30HariSampaiKemarin() {
+  // Gunakan tanggal kalender WIB; hari ini belum dihitung karena belum selesai.
+  const akhir = new Date(`${todayISO()}T00:00:00Z`);
+  akhir.setUTCDate(akhir.getUTCDate() - 1);
+  const awal = new Date(akhir);
+  awal.setUTCDate(awal.getUTCDate() - 29);
+  return { start: awal.toISOString().slice(0, 10), end: akhir.toISOString().slice(0, 10) };
+}
+
 export default function RekomendasiModalPage() {
-  const profil = mockProfil; // nanti: ganti dengan data asli (mis. hasil hitungKelayakan di lib/credit.ts)
-  const hasil = useMemo(() => calculateRecommendation(profil, mockBanks, currentBiRate), [profil]);
-  const [terbuka, setTerbuka] = useState<string | null>(hasil[0]?.bank.id ?? null);
+  const router = useRouter();
+  const [profil, setProfil] = useState<Profil | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [menyimpan, setMenyimpan] = useState(false);
+  const [error, setError] = useState('');
+  const [editProfil, setEditProfil] = useState(false);
+  const [terbuka, setTerbuka] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    nama_usaha: '',
+    tanggal_mulai_usaha: '',
+    hari_buka_per_bulan: '26',
+    kebutuhan_modal: '',
+  });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      if (!user) { router.replace('/login'); return; }
+
+      const [hasilProfil, hari] = await Promise.all([
+        supabase.from('business_profiles')
+          .select('nama_usaha,tanggal_mulai_usaha,hari_buka_per_bulan,kebutuhan_modal')
+          .eq('user_id', user.id)
+          .maybeSingle(),
+        (() => {
+          const periode = rentang30HariSampaiKemarin();
+          return fetchHari(periode.start, periode.end);
+        })(),
+      ]);
+
+      if (hasilProfil.error) throw hasilProfil.error;
+      const dataProfil = hasilProfil.data;
+      if (!dataProfil) {
+        setProfil(null);
+        setForm((f) => ({
+          ...f,
+          nama_usaha: user.user_metadata?.nama_usaha ?? f.nama_usaha,
+        }));
+      } else {
+        const profilBaru = buatProfilRekomendasi(dataProfil, hari, user.user_metadata?.nama_usaha ?? 'Usaha Saya');
+        setProfil(profilBaru);
+        setForm({
+          nama_usaha: dataProfil.nama_usaha,
+          tanggal_mulai_usaha: dataProfil.tanggal_mulai_usaha,
+          hari_buka_per_bulan: String(dataProfil.hari_buka_per_bulan),
+          kebutuhan_modal: String(dataProfil.kebutuhan_modal),
+        });
+      }
+    } catch (e) {
+      setError((e as Error).message || 'Gagal memuat data usaha.');
+    } finally {
+      setLoading(false);
+    }
+  }, [router]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const hasil = useMemo(
+    () => profil ? calculateRecommendation(profil, mockBanks, currentBiRate) : [],
+    [profil],
+  );
+
+  useEffect(() => {
+    setTerbuka(hasil[0]?.bank.id ?? null);
+  }, [hasil]);
+
+  async function simpanProfil(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError('');
+    setMenyimpan(true);
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      if (!user) { router.replace('/login'); return; }
+
+      const payload = {
+        user_id: user.id,
+        nama_usaha: form.nama_usaha.trim(),
+        tanggal_mulai_usaha: form.tanggal_mulai_usaha,
+        hari_buka_per_bulan: Number(form.hari_buka_per_bulan),
+        kebutuhan_modal: Number(form.kebutuhan_modal),
+        updated_at: new Date().toISOString(),
+      };
+      if (!payload.nama_usaha || !payload.tanggal_mulai_usaha ||
+          !Number.isInteger(payload.hari_buka_per_bulan) || payload.hari_buka_per_bulan < 1 || payload.hari_buka_per_bulan > 31 ||
+          !Number.isFinite(payload.kebutuhan_modal) || payload.kebutuhan_modal <= 0) {
+        throw new Error('Lengkapi nama usaha, tanggal mulai, hari buka, dan kebutuhan modal dengan benar.');
+      }
+
+      const { error: simpanError } = await supabase
+        .from('business_profiles')
+        .upsert(payload, { onConflict: 'user_id' });
+      if (simpanError) throw simpanError;
+
+      // Samakan nama usaha di metadata agar halaman lama (Kasir/Statistik) tetap memakai nama yang sama.
+      await supabase.auth.updateUser({ data: { nama_usaha: payload.nama_usaha } });
+      setEditProfil(false);
+      await load();
+    } catch (e) {
+      setError((e as Error).message || 'Gagal menyimpan profil usaha.');
+    } finally {
+      setMenyimpan(false);
+    }
+  }
 
   return (
     <main className="min-h-screen">
@@ -363,7 +472,9 @@ export default function RekomendasiModalPage() {
         <header className="flex items-start justify-between gap-3">
           <div>
             <h1 className="m-0 text-xl font-extrabold tracking-tight text-slate-900">Rekomendasi Modal</h1>
-            <p className="mt-1 text-xs font-semibold text-slate-500">{profil.nama} · butuh {ringkas(profil.kebutuhanModal)}</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              {profil ? `${profil.nama} · butuh ${ringkas(profil.kebutuhanModal)}` : 'Gunakan catatan usaha dari akun Anda'}
+            </p>
           </div>
           <div className="rounded-xl bg-slate-900 px-3 py-1.5 text-right">
             <p className="text-[10px] font-semibold uppercase text-slate-400">BI Rate</p>
@@ -371,24 +482,76 @@ export default function RekomendasiModalPage() {
           </div>
         </header>
 
-        <PapanSkor profil={profil} />
+        {error && <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+        {loading && <p className="text-center text-sm text-slate-500">Memuat data usaha dari Supabase…</p>}
 
-        <section className="grid gap-3">
-          <div>
-            <h2 className="m-0 text-sm font-extrabold text-slate-900">Pilihan untuk Anda</h2>
-            <p className="mt-0.5 text-xs text-slate-500">Urut dari yang paling cocok. Ketuk kartu untuk penjelasan.</p>
+        {!loading && (!profil || editProfil) && (
+          <form onSubmit={simpanProfil} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div>
+              <h2 className="m-0 text-sm font-extrabold text-slate-900">Profil usaha</h2>
+              <p className="mt-1 text-xs text-slate-500">Data ini tersimpan khusus untuk akun yang sedang login.</p>
+            </div>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              Nama usaha
+              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" required value={form.nama_usaha}
+                onChange={(e) => setForm((f) => ({ ...f, nama_usaha: e.target.value }))} placeholder="Contoh: Warung Makan Berkah" />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              Mulai menjalankan usaha
+              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="date" required max={todayISO()} value={form.tanggal_mulai_usaha}
+                onChange={(e) => setForm((f) => ({ ...f, tanggal_mulai_usaha: e.target.value }))} />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              Rata-rata hari buka per bulan
+              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="number" min="1" max="31" required value={form.hari_buka_per_bulan}
+                onChange={(e) => setForm((f) => ({ ...f, hari_buka_per_bulan: e.target.value }))} />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              Kebutuhan modal yang diajukan (Rp)
+              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="number" min="1" step="1000" required value={form.kebutuhan_modal}
+                onChange={(e) => setForm((f) => ({ ...f, kebutuhan_modal: e.target.value }))} placeholder="Contoh: 10000000" />
+            </label>
+            <button className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white disabled:opacity-50" disabled={menyimpan}>
+              {menyimpan ? 'Menyimpan…' : 'Simpan profil usaha'}
+            </button>
+            {profil && <button type="button" className="text-sm font-semibold text-slate-500" onClick={() => setEditProfil(false)}>Batal</button>}
+          </form>
+        )}
+
+        {!loading && profil && !editProfil && (
+          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+            <p className="m-0 text-xs text-slate-600">Profil usaha tersimpan. Analisis memakai catatan kasir 30 hari terakhir.</p>
+            <button type="button" className="shrink-0 text-xs font-bold text-slate-900 underline" onClick={() => setEditProfil(true)}>Ubah</button>
           </div>
-          {hasil.map((r, i) => (
-            <KartuBank
-              key={r.bank.id} r={r} urutan={i} profil={profil}
-              terbuka={terbuka === r.bank.id}
-              onToggle={() => setTerbuka((t) => (t === r.bank.id ? null : r.bank.id))}
-            />
-          ))}
-        </section>
+        )}
+
+        {!loading && profil && profil.hariDicatat30 === 0 && !editProfil && (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            Belum ada catatan kasir dalam 30 hari terakhir. Mulai catat modal harian, penjualan, dan biaya di halaman Kasir agar rekomendasi dapat dihitung dari data usaha Anda.
+          </section>
+        )}
+
+        {!loading && profil && profil.hariDicatat30 > 0 && !editProfil && (
+          <>
+            <PapanSkor profil={profil} />
+            <section className="grid gap-3">
+              <div>
+                <h2 className="m-0 text-sm font-extrabold text-slate-900">Pilihan untuk Anda</h2>
+                <p className="mt-0.5 text-xs text-slate-500">Diurutkan berdasarkan kecocokan dengan catatan usaha akun ini.</p>
+              </div>
+              {hasil.map((r, i) => (
+                <KartuBank
+                  key={r.bank.id} r={r} urutan={i} profil={profil}
+                  terbuka={terbuka === r.bank.id}
+                  onToggle={() => setTerbuka((t) => (t === r.bank.id ? null : r.bank.id))}
+                />
+              ))}
+            </section>
+          </>
+        )}
 
         <p className="m-0 text-center text-[11px] text-slate-400">
-          Data contoh untuk simulasi, bukan penawaran resmi. Keputusan akhir ada di lembaga keuangan.
+          Profil dan perhitungan omzet berasal dari akun Anda. Daftar lembaga, bunga, dan plafon di halaman ini masih data simulasi, bukan penawaran resmi. Verifikasi langsung ke lembaga keuangan sebelum mengambil keputusan.
         </p>
       </div>
 
