@@ -9,14 +9,18 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
+    "@tailwindcss/postcss": "^4.3.3",
     "exceljs": "^4.4.0",
     "framer-motion": "^12.43.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.2",
+    "lucide-react": "^1.65.0",
     "next": "^15.0.0",
+    "postcss": "^8.5.32",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "recharts": "^2.15.4"
+    "recharts": "^2.15.4",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
