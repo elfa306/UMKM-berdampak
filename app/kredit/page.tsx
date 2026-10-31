@@ -446,7 +446,7 @@ export default function RekomendasiModalPage() {
       };
       if (!payload.nama_usaha || !payload.tanggal_mulai_usaha ||
           !Number.isInteger(payload.hari_buka_per_bulan) || payload.hari_buka_per_bulan < 1 || payload.hari_buka_per_bulan > 31 ||
-          !Number.isFinite(payload.kebutuhan_modal) || payload.kebutuhan_modal <= 0) {
+          !Number.isFinite(payload.kebutuhan_modal) || !Number.isInteger(payload.kebutuhan_modal) || payload.kebutuhan_modal <= 0) {
         throw new Error('Lengkapi nama usaha, tanggal mulai, hari buka, dan kebutuhan modal dengan benar.');
       }
 
@@ -508,7 +508,7 @@ export default function RekomendasiModalPage() {
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-600">
               Kebutuhan modal yang diajukan (Rp)
-              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="number" min="1" step="1000" required value={form.kebutuhan_modal}
+              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="number" min="1" step="1" required value={form.kebutuhan_modal}
                 onChange={(e) => setForm((f) => ({ ...f, kebutuhan_modal: e.target.value }))} placeholder="Contoh: 10000000" />
             </label>
             <button className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white disabled:opacity-50" disabled={menyimpan}>
