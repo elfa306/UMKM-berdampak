@@ -6,7 +6,6 @@ import BottomNav from '@/components/BottomNav';
 import { Press, Rise } from '@/components/Motion';
 
 const menu = [
-  { href: '/harga', ico: '🛒', judul: 'Cek Harga Bahan', ket: 'Bandingkan harga bahan baku di toko online' },
   { href: '/integrasi', ico: '🔗', judul: 'Hubungkan QRIS', ket: 'Pasang MacroDroid supaya QRIS tercatat otomatis' },
   { href: '/reset-password', ico: '🔑', judul: 'Ganti Kata Sandi', ket: 'Ubah kata sandi akun Anda' },
 ];

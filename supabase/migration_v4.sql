@@ -1,37 +1,26 @@
--- Jalankan SETELAH schema.sql, migration_v2.sql, dan migration_v3.sql.
--- Satu baris profil untuk setiap akun Supabase Auth.
+-- Jalankan SETELAH schema.sql, migration_v2.sql, migration_v3.sql (SQL Editor > New query > Run)
+-- Aman dijalankan berulang kali.
+-- Menyimpan harga median bahan baku per hari, supaya halaman Cek Harga bisa menampilkan "naik/turun X%".
 
-create table if not exists public.business_profiles (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  nama_usaha text not null,
-  tanggal_mulai_usaha date not null,
-  hari_buka_per_bulan smallint not null default 26
-    check (hari_buka_per_bulan between 1 and 31),
-  kebutuhan_modal numeric(14,0) not null
-    check (kebutuhan_modal > 0),
+create table if not exists public.harga_snapshot (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  bahan text not null,
+  tanggal date not null,
+  harga_median numeric(14,0) not null check (harga_median > 0),
+  harga_termurah numeric(14,0),
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  unique (user_id, bahan, tanggal)
 );
 
-alter table public.business_profiles enable row level security;
+alter table public.harga_snapshot enable row level security;
 
-revoke all on table public.business_profiles from anon, authenticated;
-grant select, insert, update on public.business_profiles to authenticated;
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'harga_snapshot') then
+    create policy "own rows" on public.harga_snapshot
+      for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+  end if;
+end $$;
 
--- Pisahkan kebijakan agar operasi upsert (insert/update) dapat melewati RLS
--- hanya untuk baris milik akun yang sedang login.
-drop policy if exists "business_profiles_select_own" on public.business_profiles;
-create policy "business_profiles_select_own"
-  on public.business_profiles for select to authenticated
-  using ((select auth.uid()) = user_id);
-
-drop policy if exists "business_profiles_insert_own" on public.business_profiles;
-create policy "business_profiles_insert_own"
-  on public.business_profiles for insert to authenticated
-  with check ((select auth.uid()) = user_id);
-
-drop policy if exists "business_profiles_update_own" on public.business_profiles;
-create policy "business_profiles_update_own"
-  on public.business_profiles for update to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
+create index if not exists harga_snapshot_idx on public.harga_snapshot (user_id, bahan, tanggal desc);
