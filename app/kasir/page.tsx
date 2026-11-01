@@ -41,19 +41,15 @@ export default function Kasir() {
 
   const info = (t: string) => { setToast(t); setTimeout(() => setToast(''), 2000); };
 
-  // Pindahkan pembayaran QRIS yang sempat tertahan di kotak masuk (hari belum dimulai) ke transaksi hari ini
+  // Pindahkan pembayaran MacroDroid yang tertahan di inbox secara atomik.
+  // RPC hanya memproses inbox milik pengguna yang sedang login dan tanggal sesi yang sama.
   async function importQris(sesiId: string) {
-    const { data: inbox } = await supabase
-      .from('qris_inbox').select('id,mutation_id,jumlah,catatan,received_at').eq('posted', false).order('received_at');
-    for (const m of inbox ?? []) {
-      const hari = new Date(m.received_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
-      if (hari !== tanggal) continue;
-      const ket = 'QRIS masuk' + (m.catatan ? ` · ${String(m.catatan).slice(0, 40)}` : '');
-      const { error } = await supabase.from('transactions').insert({
-        session_id: sesiId, jenis: 'penjualan', keterangan: ket, jumlah: Number(m.jumlah), qty: 1, metode: 'qris', ref_id: m.mutation_id,
-      });
-      if (error && error.code !== '23505') continue; // 23505 = sudah tercatat
-      await supabase.from('qris_inbox').update({ posted: true }).eq('id', m.id);
+    const { error } = await supabase.rpc('post_pending_gopay_notifications', {
+      p_session_id: sesiId,
+    });
+    if (error) {
+      console.error('Gagal memproses inbox GoPay:', error.message);
+      setErr('Ada notifikasi QRIS yang belum berhasil dimasukkan. Muat ulang kasir atau hubungi pengelola.');
     }
   }
 
@@ -64,7 +60,7 @@ export default function Kasir() {
     setNamaUsaha(user.user_metadata?.nama_usaha ?? 'Usaha Saya');
 
     const [p, s] = await Promise.all([
-      supabase.from('products').select('id,nama,harga').order('created_at'),
+      supabase.from('products').select('id,nama,harga').eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
       supabase.from('daily_sessions').select('id,modal_harian').eq('tanggal', tanggal).maybeSingle(),
     ]);
     setProducts((p.data ?? []).map((x) => ({ ...x, harga: Number(x.harga) })));
@@ -134,9 +130,27 @@ export default function Kasir() {
     load();
   }
 
-  async function catat(row: { jenis: 'penjualan' | 'biaya'; keterangan: string; jumlah: number; metode: 'tunai' | 'qris' | null }) {
+  async function catat(row: { jenis: 'penjualan' | 'biaya'; keterangan: string; jumlah: number; metode: 'tunai' | 'qris' | null }, productId?: string) {
     if (!sesi) return;
     setErr('');
+    if (row.jenis === 'penjualan' && productId) {
+      const { data, error } = await supabase.rpc('record_inventory_sale', {
+        p_session_id: sesi.id,
+        p_product_id: productId,
+        p_quantity: 1,
+        p_method: row.metode ?? 'tunai',
+        p_idempotency_key: crypto.randomUUID(),
+      });
+      if (error) {
+        if (error.message.includes('insufficient_stock')) return setErr('Stok produk tidak mencukupi. Periksa menu Inventaris.');
+        return setErr(error.message);
+      }
+      const transaction = data?.transaction;
+      if (!transaction) return setErr('Transaksi berhasil diproses tetapi data transaksi tidak ditemukan. Muat ulang kasir.');
+      setTxs((t) => (t.some((x) => x.id === transaction.id) ? t : [...t, keTx(transaction)]));
+      info(`✅ ${row.keterangan} tercatat`);
+      return;
+    }
     const { data, error } = await supabase.from('transactions').insert({ ...row, session_id: sesi.id, qty: 1 }).select('*').single();
     if (error) return setErr(error.message);
     setTxs((t) => (t.some((x) => x.id === data.id) ? t : [...t, keTx(data)]));
@@ -146,6 +160,13 @@ export default function Kasir() {
   async function batalTerakhir() {
     const last = txs[txs.length - 1];
     if (!last) return;
+    if (last.product_id && last.payment_source === 'cashier') {
+      const { error } = await supabase.rpc('cancel_inventory_sale', { p_transaction_id: last.id });
+      if (error) return setErr(error.message);
+      setTxs((t) => t.filter((x) => x.id !== last.id));
+      info('✅ Transaksi dibatalkan dan stok dikembalikan.');
+      return;
+    }
     const { error } = await supabase.from('transactions').delete().eq('id', last.id);
     if (error) return setErr(error.message);
     setTxs((t) => t.slice(0, -1));
@@ -232,7 +253,7 @@ export default function Kasir() {
               </div>
               <div className="tiles">
                 {products.map((p) => (
-                  <Press key={p.id} className="tile" onClick={() => catat({ jenis: 'penjualan', keterangan: p.nama, jumlah: p.harga, metode })}>
+                  <Press key={p.id} className="tile" onClick={() => catat({ jenis: 'penjualan', keterangan: p.nama, jumlah: p.harga, metode }, p.id)}>
                     {p.nama}<small>{rupiah(p.harga)}</small>
                   </Press>
                 ))}

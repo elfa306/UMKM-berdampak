@@ -1,4 +1,5 @@
 import './globals.css';
+import BusinessProfileGate from '@/components/BusinessProfileGate';
 import type { ReactNode } from 'react';
 import type { Viewport } from 'next';
 
@@ -13,7 +14,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
       </head>
-      <body>{children}</body>
+      <body><BusinessProfileGate />{children}</body>
     </html>
   );
 }

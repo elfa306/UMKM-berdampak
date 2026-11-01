@@ -1,6 +1,8 @@
 export type Product = { id: string; nama: string; harga: number };
 export type Tx = {
   id: string;
+  product_id?: string | null;
+  payment_source?: string | null;
   jenis: 'penjualan' | 'biaya';
   keterangan: string;
   jumlah: number;

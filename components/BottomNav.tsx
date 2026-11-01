@@ -6,24 +6,20 @@ import { membal } from './Motion';
 
 const items = [
   { href: '/kasir', ico: '🧾', label: 'Kasir' },
-  { href: '/statistik', ico: '📊', label: 'Laporan' }, // Riwayat + Statistik dalam satu halaman
+  { href: '/riwayat', ico: '🕘', label: 'Riwayat' },
+  { href: '/statistik', ico: '📊', label: 'Statistik' },
   { href: '/kredit', ico: '🏦', label: 'Kredit' },
-  { href: '/harga', ico: '🛒', label: 'Cek Harga' },
   { href: '/lainnya', ico: '☰', label: 'Lainnya' },
 ];
-// Halaman turunan tetap menyalakan tab induknya
-const turunan: Record<string, string[]> = {
-  '/statistik': ['/riwayat'],
-  '/kredit': ['/rekomendasi'],
-  '/lainnya': ['/integrasi', '/reset-password'],
-};
+// Halaman di bawah menu "Lainnya" tetap menyalakan tab Lainnya
+const turunanLainnya = ['/harga', '/integrasi', '/pengaturan-usaha', '/inventaris', '/produksi', '/akuntansi'];
 
 export default function BottomNav() {
   const p = usePathname();
   return (
     <nav className="bottom-nav" data-html2canvas-ignore>
       {items.map((i) => {
-        const aktif = p === i.href || (turunan[i.href]?.includes(p) ?? false);
+        const aktif = p === i.href || (i.href === '/lainnya' && turunanLainnya.includes(p));
         return (
           <motion.div key={i.href} whileTap={{ scale: 0.88 }} transition={membal} style={{ display: 'contents' }}>
             <Link href={i.href} className={aktif ? 'active' : ''}>

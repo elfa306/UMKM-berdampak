@@ -64,11 +64,24 @@ export default function Integrasi() {
   const [token, setToken] = useState('');
   const [err, setErr] = useState('');
   const [endpoint, setEndpoint] = useState('');
-  const [terakhir, setTerakhir] = useState<{ waktu: string; jumlah: number } | null | undefined>(undefined);
+  const [terakhir, setTerakhir] = useState<{ waktu: string; jumlah: number; posted: boolean } | null | undefined>(undefined);
+  const [jumlahSinyal, setJumlahSinyal] = useState(0);
+  const [metodeDipilih, setMetodeDipilih] = useState<string | null>(null);
+  const [namaUsaha, setNamaUsaha] = useState('');
 
   const cekStatus = useCallback(async () => {
-    const { data } = await supabase.from('qris_inbox').select('received_at,jumlah').order('received_at', { ascending: false }).limit(1).maybeSingle();
-    setTerakhir(data ? { waktu: new Date(data.received_at).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', dateStyle: 'medium', timeStyle: 'short' }), jumlah: Number(data.jumlah) } : null);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const [{ data }, { count }] = await Promise.all([
+      supabase.from('qris_inbox').select('received_at,jumlah,posted').eq('user_id', user.id).order('received_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('qris_inbox').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
+    ]);
+    setJumlahSinyal(count ?? 0);
+    setTerakhir(data ? {
+      waktu: new Date(data.received_at).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', dateStyle: 'medium', timeStyle: 'short' }),
+      jumlah: Number(data.jumlah),
+      posted: Boolean(data.posted),
+    } : null);
   }, []);
 
   useEffect(() => {
@@ -76,8 +89,13 @@ export default function Integrasi() {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return router.replace('/login');
-      const { data } = await supabase.from('webhook_tokens').select('user_id').maybeSingle();
-      setAktif(!!data);
+      const [{ data: tokenRow }, { data: profile }] = await Promise.all([
+        supabase.from('webhook_tokens').select('created_at').eq('user_id', user.id).maybeSingle(),
+        supabase.from('business_profiles').select('nama_usaha,metode_pembayaran').eq('user_id', user.id).maybeSingle(),
+      ]);
+      setAktif(!!tokenRow);
+      setNamaUsaha(profile?.nama_usaha ?? user.user_metadata?.nama_usaha ?? 'Usaha Saya');
+      setMetodeDipilih(profile?.metode_pembayaran ?? null);
       await cekStatus();
       setReady(true);
     })();
@@ -104,17 +122,43 @@ export default function Integrasi() {
       {err && <p className="err">{err}</p>}
 
       <div className="glass-card">
-        <span className="label">Status sambungan</span>
-        {terakhir === null && <p className="muted">Belum ada pembayaran yang masuk lewat sambungan ini. Ikuti panduan di bawah, lalu lakukan tes pembayaran kecil.</p>}
-        {terakhir && <p style={{ margin: '6px 0', fontWeight: 800, color: '#059669' }}>✅ Tersambung. Sinyal terakhir: {terakhir.waktu} (Rp {terakhir.jumlah.toLocaleString('id-ID')})</p>}
-        <button className="btn-soft" onClick={cekStatus}>Cek lagi</button>
+        <span className="label">Metode pembayaran usaha</span>
+        <p style={{ margin: '6px 0', fontWeight: 800 }}>{namaUsaha}</p>
+        <p className="muted" style={{ margin: '4px 0' }}>
+          {metodeDipilih === 'gopay_macrodroid'
+            ? 'Profil usaha memilih GoPay Merchant + MacroDroid. QRIS yang sudah Anda gunakan tetap dipertahankan.'
+            : metodeDipilih === 'belibayar_sandbox_static'
+              ? 'Profil usaha memilih Belibayar Sandbox QRIS statis. Integrasi ini terpisah dari GoPay Merchant.'
+              : metodeDipilih === 'belibayar_sandbox_dynamic'
+                ? 'Profil usaha memilih Belibayar Sandbox QRIS dinamis. Integrasi ini terpisah dari GoPay Merchant.'
+                : 'Halaman ini khusus untuk menghubungkan GoPay Merchant melalui MacroDroid. Pengaturan metode dapat diubah di Profil & Jenis Usaha.'}
+        </p>
+      </div>
+
+      <div className="glass-card">
+        <span className="label">Status sambungan GoPay Merchant</span>
+        {!aktif && <p className="muted" style={{ margin: '6px 0' }}>Token belum dibuat. Buat token untuk menghubungkan MacroDroid dengan akun usaha ini.</p>}
+        {aktif && terakhir === null && <p className="muted" style={{ margin: '6px 0' }}>Token aktif, tetapi belum ada notifikasi pembayaran yang diterima. Setelah MacroDroid dikonfigurasi, lakukan tes pembayaran kecil.</p>}
+        {terakhir && (
+          <div style={{ margin: '8px 0' }}>
+            <p style={{ fontWeight: 800, color: '#059669', margin: 0 }}>✅ Notifikasi pembayaran diterima</p>
+            <p style={{ margin: '4px 0' }}>Sinyal terakhir: {terakhir.waktu} · Rp {terakhir.jumlah.toLocaleString('id-ID')}</p>
+            <p className="muted" style={{ margin: '4px 0' }}>{terakhir.posted ? 'Sudah dimasukkan ke transaksi kasir.' : 'Tersimpan di inbox; menunggu sesi kasir pada tanggal yang sama.'}</p>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0' }}>
+          <span className="badge" style={{ background: aktif ? '#dcfce7' : '#fef3c7', color: aktif ? '#166534' : '#92400e', padding: '5px 9px', borderRadius: 999, fontSize: '.75rem', fontWeight: 800 }}>{aktif ? 'TOKEN AKTIF' : 'BELUM TERHUBUNG'}</span>
+          <span className="muted" style={{ fontSize: '.78rem' }}>{jumlahSinyal} notifikasi diterima</span>
+        </div>
+        <button className="btn-soft" onClick={cekStatus}>Cek status lagi</button>
       </div>
 
       <div className="glass-card">
         <span className="label">Apa ini?</span>
         <p style={{ fontSize: '.88rem', lineHeight: 1.6, margin: '6px 0' }}>
-          Setiap ada uang masuk ke GoPay Merchant, HP Anda menerima notifikasi. Aplikasi bantu bernama <b>MacroDroid</b> membaca notifikasi itu dan mengirimkannya ke aplikasi Kasir ini, sehingga penjualan QRIS tercatat sendiri tanpa diketik. Panduan ini dibuat untuk pemula. Siapkan sekitar 15 sampai 20 menit dan ikuti urutannya.
+          Setiap ada uang masuk ke GoPay Merchant, HP Anda menerima notifikasi. Aplikasi bantu bernama <b>MacroDroid</b> membaca notifikasi itu dan mengirimkannya ke aplikasi Kasir ini, sehingga nominal pembayaran QRIS tercatat tanpa diketik. Panduan ini dibuat untuk pemula. Siapkan sekitar 15 sampai 20 menit dan ikuti urutannya.
         </p>
+        <Tip warna="#e0f2fe"><b>Catatan pencatatan:</b> notifikasi GoPay umumnya hanya memuat nominal dan informasi pembayaran, bukan daftar barang. Karena itu transaksi otomatis dicatat sebagai penjualan QRIS tanpa rincian SKU. Stok produk tidak akan dikurangi otomatis hanya dari nominal notifikasi.</Tip>
       </div>
 
       <Bagian no={1} judul="Sebelum mulai">

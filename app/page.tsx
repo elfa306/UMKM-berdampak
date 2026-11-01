@@ -11,11 +11,11 @@ const masuk = (i: number) => ({ initial: { opacity: 0, y: 24, scale: 0.97 }, whi
 export default function Landing() {
   const router = useRouter();
   // Sudah login? langsung ke kasir
-  useEffect(() => { supabase.auth.getSession().then(({ data }) => { if (data.session) router.replace('/kasir'); }); }, [router]);
+  useEffect(() => { supabase.auth.getSession().then(({ data }) => { if (data.session) router.replace('/onboarding'); }); }, [router]);
 
   return (
     <main className="landing">
-      <nav><b>UMKM <span>Kasir</span></b><Link href="/login" className="btn-pill active">Masuk</Link></nav>
+      <nav><b>UMKM <span>Kasir</span></b><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Link href="/demo" className="btn-pill">Coba demo</Link><Link href="/login" className="btn-pill active">Masuk</Link></div></nav>
 
       <div className="bento">
         <motion.section className="b-hero" {...masuk(0)}>
@@ -27,6 +27,7 @@ export default function Landing() {
           <div className="b-cta">
             <motion.span whileTap={{ scale: 0.94 }} transition={membal}><Link className="p" href="/login">Mulai gratis</Link></motion.span>
             <motion.span whileTap={{ scale: 0.94 }} transition={membal}><Link className="s" href="#fitur">Lihat fiturnya</Link></motion.span>
+            <motion.span whileTap={{ scale: 0.94 }} transition={membal}><Link className="s" href="/demo">Coba demo interaktif</Link></motion.span>
           </div>
         </motion.section>
 

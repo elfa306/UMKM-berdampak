@@ -33,7 +33,7 @@ export default function Login() {
       }
       if (mode === 'daftar') {
         const { data, error } = await supabase.auth.signUp({
-          email, password, options: { data: { nama_usaha: String(fd.get('nama_usaha')) }, emailRedirectTo: `${window.location.origin}/kasir` },
+          email, password, options: { data: { nama_usaha: String(fd.get('nama_usaha')) }, emailRedirectTo: `${window.location.origin}/onboarding` },
         });
         if (error) return setErr(pesanAuth(error.message));
         if (!data.session) return setInfo('Cek email Anda untuk konfirmasi, lalu masuk.');
@@ -41,7 +41,7 @@ export default function Login() {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) return setErr(pesanAuth(error.message));
       }
-      router.replace('/kasir');
+      router.replace('/onboarding');
     } catch (x) {
       setErr(pesanAuth((x as Error).message));
     } finally {
