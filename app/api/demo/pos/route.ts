@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getCurrentDemoSession, getDemoAdminClient, isSameOriginRequest } from '@/lib/demoSessions.server';
 import { getDemoPOSSnapshot } from '@/lib/demoPos.server';
-import { BelibayarQrPayloadUnavailableError, createDynamicQris, isBelibayarSandboxConfigured } from '@/lib/belibayarSandbox.server';
+import { BelibayarQrPayloadUnavailableError, createDynamicQris, createStaticQris, isBelibayarSandboxConfigured } from '@/lib/belibayarSandbox.server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -150,8 +151,9 @@ export async function POST(request: Request) {
         }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
       } catch (gatewayError) {
         if (gatewayError instanceof BelibayarQrPayloadUnavailableError) {
-          // Belibayar has acknowledged a pending transaction, so do not cancel
-          // the local order: a later webhook may still report it as paid.
+          // Belibayar has acknowledged a pending dynamic transaction, so keep
+          // its reference intact. The static QR below is display-only fallback:
+          // it must never be written into demo_payments or treated as this invoice's QR.
           const gateway = gatewayError.gateway;
           const expiredAt = typeof gateway.expired_at === 'number'
             ? new Date(gateway.expired_at * 1000).toISOString()
@@ -174,12 +176,65 @@ export async function POST(request: Request) {
           if (savePendingError) {
             console.error('Save pending Belibayar response failed:', savePendingError.message);
           }
+
+          // Reuse the exact session-level static QR already shown in the static
+          // QR panel. Create it once only when this demo session has none.
+          let staticFallback: { merchant_reference: string; qr_content: string } | null = null;
+          try {
+            const { data: existingStatic, error: existingStaticError } = await admin
+              .from('demo_static_qris')
+              .select('merchant_reference,qr_content,status')
+              .eq('session_id', session.id)
+              .maybeSingle();
+            if (existingStaticError) throw existingStaticError;
+
+            if (existingStatic?.status === 'active' && typeof existingStatic.qr_content === 'string' && existingStatic.qr_content.trim()) {
+              staticFallback = {
+                merchant_reference: existingStatic.merchant_reference,
+                qr_content: existingStatic.qr_content,
+              };
+            } else {
+              const merchantReference = `DEMOQR_${session.id.replace(/-/g, '')}_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+              const label = `${session.business_name} - Demo`.slice(0, 100);
+              const createdStatic = await createStaticQris({ reference: merchantReference, label });
+              const { data: savedStatic, error: saveStaticError } = await admin
+                .from('demo_static_qris')
+                .upsert({
+                  session_id: session.id,
+                  provider_reference: createdStatic.reference,
+                  merchant_reference: merchantReference,
+                  label,
+                  qr_content: createdStatic.qr_content,
+                  status: createdStatic.status,
+                  raw_payload: createdStatic,
+                }, { onConflict: 'session_id' })
+                .select('merchant_reference,qr_content,status')
+                .single();
+              if (saveStaticError || !savedStatic) {
+                throw new Error(`QRIS statis berhasil dibuat tetapi gagal disimpan: ${saveStaticError?.message ?? 'data kosong'}`);
+              }
+              if (savedStatic.status === 'active' && savedStatic.qr_content) {
+                staticFallback = {
+                  merchant_reference: savedStatic.merchant_reference,
+                  qr_content: savedStatic.qr_content,
+                };
+              }
+            }
+          } catch (staticFallbackError) {
+            console.error(
+              'Could not prepare static QRIS display fallback:',
+              staticFallbackError instanceof Error ? staticFallbackError.message : staticFallbackError,
+            );
+          }
+
           const { error: annotateOrderError } = await admin.from('demo_orders').update({
             metadata: {
               ...(order.metadata ?? {}),
               payment_provider: 'belibayar_sandbox',
               external_reference: externalReference,
               qr_payload_missing: true,
+              qr_fallback_static: Boolean(staticFallback),
+              static_qris_fallback_reference: staticFallback?.merchant_reference ?? null,
             },
           }).eq('id', order.id).eq('session_id', session.id);
           if (annotateOrderError) console.error('Annotate pending Belibayar order failed:', annotateOrderError.message);
@@ -187,17 +242,22 @@ export async function POST(request: Request) {
           console.error('Belibayar charge acknowledged but QR payload is missing:', JSON.stringify(gatewayError.diagnostic));
           return NextResponse.json({
             ok: true,
-            warning: 'Belibayar menerima transaksi, tetapi data QR belum tersedia. Invoice tetap pending agar webhook yang datang kemudian tetap dapat diproses. Gunakan simulator Sandbox untuk pengujian; jangan melakukan pembayaran sungguhan tanpa QR.',
+            warning: staticFallback
+              ? 'QRIS dinamis Belibayar belum tersedia. QRIS statis sesi ditampilkan sebagai fallback demo saja; QR tersebut tidak tertaut ke invoice ini dan tidak dapat melunasinya. Invoice tetap pending sampai webhook transaksi dinamis terverifikasi.'
+              : 'Belibayar menerima transaksi, tetapi data QR dinamis belum tersedia dan QRIS statis fallback juga gagal dimuat. Invoice tetap pending; jangan lakukan pembayaran sungguhan.',
             ...data,
             order: { ...order, payment_method: 'QRIS Dinamis (Belibayar Sandbox)' },
             paymentGateway: {
               provider: 'belibayar_sandbox',
               reference: gateway.reference,
               transactionId: gateway.transaction_id ?? null,
-              qrContent: gateway.qr_content ?? null,
-              qrUrl: gateway.qr_url ?? null,
+              // This QR is intentionally returned only to the UI. The payment
+              // row keeps the true (empty) dynamic QR fields for webhook matching.
+              qrContent: staticFallback?.qr_content ?? gateway.qr_content ?? null,
+              qrUrl: staticFallback ? null : gateway.qr_url ?? null,
               expiredAt,
               qrPayloadMissing: true,
+              qrFallback: Boolean(staticFallback),
             },
           }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
         }

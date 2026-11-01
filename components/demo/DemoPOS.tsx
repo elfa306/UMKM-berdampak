@@ -19,7 +19,7 @@ type Props = {
   initialSnapshot: { products: DemoPOSProduct[]; recentOrders: DemoPOSOrder[] };
 };
 type CartLine = { product: DemoPOSProduct; qty: number };
-type PendingOrder = { id: string; invoiceNo: string; total: number; paymentMethod: string; method: 'cash' | 'qris'; qrContent?: string | null; qrUrl?: string | null; qrPayloadMissing?: boolean; expiresAt?: string | null; paymentStatus?: 'pending' | 'expired' | 'failed'; items: Array<{ name: string; qty: number; unit: string; unitPrice: number; subtotal: number }> };
+type PendingOrder = { id: string; invoiceNo: string; total: number; paymentMethod: string; method: 'cash' | 'qris'; qrContent?: string | null; qrUrl?: string | null; qrPayloadMissing?: boolean; qrFallback?: boolean; expiresAt?: string | null; paymentStatus?: 'pending' | 'expired' | 'failed'; items: Array<{ name: string; qty: number; unit: string; unitPrice: number; subtotal: number }> };
 type NewProductForm = {
   name: string; sku: string; category: string; itemType: 'merchandise' | 'finished_good' | 'service';
   unit: string; salePrice: string; unitCost: string; stock: string; minStock: string;
@@ -126,6 +126,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
         qrContent: result.paymentGateway?.qrContent ?? null,
         qrUrl: result.paymentGateway?.qrUrl ?? null,
         qrPayloadMissing: result.paymentGateway?.qrPayloadMissing ?? false,
+        qrFallback: result.paymentGateway?.qrFallback ?? false,
         expiresAt: result.paymentGateway?.expiredAt ?? null,
         paymentStatus: 'pending',
         items: (result.items ?? []).map((item: { name: string; qty: number; unit: string; unitPrice: number; subtotal: number }) => ({
@@ -135,9 +136,11 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
       setCart({});
       await reloadPOS();
       setNotice(paymentMethod === 'qris'
-        ? result.paymentGateway?.qrPayloadMissing
-          ? 'Belibayar menerima invoice, tetapi belum mengembalikan gambar/data QR. Invoice tetap pending; simulator Sandbox masih dapat digunakan untuk menguji webhook.'
-          : 'QRIS Sandbox berhasil dibuat. Gunakan simulator untuk menguji pembayaran; stok menunggu webhook PAID.'
+        ? result.paymentGateway?.qrFallback
+          ? 'QRIS dinamis belum tersedia. QRIS statis sesi ditampilkan sebagai fallback demo; invoice tetap menunggu webhook pembayaran dinamis.'
+          : result.paymentGateway?.qrPayloadMissing
+            ? 'Belibayar menerima invoice, tetapi data QR belum tersedia. Invoice tetap pending; gunakan pemeriksaan status untuk memantau webhook.'
+            : 'QRIS Sandbox berhasil dibuat. Gunakan simulator untuk menguji pembayaran; stok menunggu webhook PAID.'
         : 'Invoice berhasil dibuat. Stok belum berkurang sampai pembayaran dikonfirmasi.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Pesanan gagal dibuat.');
@@ -456,15 +459,28 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
                 {pendingOrder.method === 'qris' && (
                   <div className="mt-4 space-y-3 rounded-2xl border border-amber-200 bg-white p-3">
                     {pendingOrder.qrContent || pendingOrder.qrUrl ? (
-                      <DemoQRCode value={pendingOrder.qrContent} imageUrl={pendingOrder.qrUrl} label="QRIS Dinamis Belibayar Sandbox" />
-                    ) : <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">{pendingOrder.qrPayloadMissing ? 'Belibayar sudah menerima transaksi, tetapi belum menyertakan data QR pada respons Charge maupun Inquiry Status. Invoice dipertahankan agar webhook tetap bisa dicocokkan. Untuk demonstrasi, gunakan simulator Sandbox di bawah. Jangan lakukan pembayaran sungguhan karena QR belum tersedia.' : 'Data QRIS tidak tersedia. Periksa respons Belibayar.'}</p>}
-                    {pendingOrder.expiresAt && <p className="text-center text-[10px] text-slate-500">Berlaku sampai {formatDate(pendingOrder.expiresAt)}</p>}
-                    <p className="rounded-xl bg-amber-50 p-3 text-[10px] leading-5 text-amber-900">QRIS Sandbox hanya untuk pengujian dan tidak dapat dibayar memakai aplikasi bank/e-wallet sungguhan. Gunakan simulator di bawah. Stok belum berubah sampai webhook PAID terverifikasi.</p>
+                      <DemoQRCode
+                        value={pendingOrder.qrContent}
+                        imageUrl={pendingOrder.qrUrl}
+                        label={pendingOrder.qrFallback ? 'QRIS Statis · Fallback Demo' : 'QRIS Dinamis Belibayar Sandbox'}
+                      />
+                    ) : <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">{pendingOrder.qrPayloadMissing ? 'Belibayar sudah menerima transaksi, tetapi data QR belum tersedia. Invoice tetap pending agar webhook transaksi dinamis tetap bisa dicocokkan. Periksa status secara berkala.' : 'Data QRIS tidak tersedia. Periksa respons Belibayar.'}</p>}
+                    {pendingOrder.expiresAt && !pendingOrder.qrFallback && <p className="text-center text-[10px] text-slate-500">Berlaku sampai {formatDate(pendingOrder.expiresAt)}</p>}
+                    {pendingOrder.qrFallback ? (
+                      <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] leading-5 text-amber-900">Ini adalah QRIS statis milik sesi demo, bukan QR dinamis untuk invoice di atas. QR ini hanya menjadi fallback tampilan; pembayaran melalui QR tersebut tidak otomatis melunasi invoice ini. Invoice tetap menunggu webhook untuk transaksi dinamis.</p>
+                    ) : (
+                      <p className="rounded-xl bg-amber-50 p-3 text-[10px] leading-5 text-amber-900">QRIS Sandbox hanya untuk pengujian. Stok belum berubah sampai webhook PAID untuk invoice ini terverifikasi.</p>
+                    )}
                   </div>
                 )}
                 <p className="mt-3 text-[11px] leading-5 text-amber-900">{pendingOrder.method === 'cash' ? 'Konfirmasi hanya setelah uang tunai benar-benar diterima.' : pendingOrder.paymentStatus === 'expired' ? 'QRIS kedaluwarsa. Buat invoice baru untuk mengulang transaksi.' : pendingOrder.paymentStatus === 'failed' ? 'Pembayaran gagal atau dibatalkan.' : 'Stok belum dikurangi. Sistem menunggu webhook pembayaran dari Belibayar.'}</p>
                 {pendingOrder.method === 'cash' ? (
                   <button type="button" onClick={() => settleOrder('paid')} disabled={!!busy} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-xs font-extrabold text-white hover:bg-emerald-800 disabled:opacity-50">{busy === 'settle' ? 'Memproses...' : 'Konfirmasi tunai diterima'}</button>
+                ) : pendingOrder.qrPayloadMissing ? (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-[10px] leading-5 text-slate-500">{pendingOrder.qrFallback ? 'Simulator QRIS dinamis dinonaktifkan karena QR yang tampil adalah QR statis fallback dan tidak terhubung dengan reference invoice.' : 'Simulator dinamis tidak ditampilkan karena Belibayar belum memberikan payload QR untuk invoice ini.'}</p>
+                    <button type="button" onClick={() => checkQrisStatus()} disabled={!!busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{busy === 'status' ? 'Memeriksa...' : 'Periksa status invoice'}</button>
+                  </div>
                 ) : (
                   <div className="mt-3 grid gap-2 sm:grid-cols-2">
                     <button type="button" onClick={() => simulateQris('success')} disabled={!!busy || pendingOrder.paymentStatus !== 'pending'} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-3 text-xs font-extrabold text-white hover:bg-emerald-800 disabled:opacity-50">{busy === 'simulate' ? 'Mengirim simulasi...' : 'Simulasikan berhasil'}</button>
