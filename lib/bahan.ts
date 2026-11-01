@@ -38,6 +38,23 @@ export function gabungBahan(peta: PetaBahan): BahanGabung[] {
   return [...m.values()].sort((a, b) => b.produk.length - a.produk.length);
 }
 
+// Pilih bahan yang akan dicek harganya: semua produk harus terwakili minimal satu bahan,
+// sisanya diisi bahan yang dipakai paling banyak produk, dibatasi `maks` agar kuota SerpApi terjaga.
+export function pilihBahan(gabung: BahanGabung[], produk: string[], maks = 10): BahanGabung[] {
+  const dipilih = new Map<string, BahanGabung>();
+  const kunci = (g: BahanGabung) => g.bahan.nama.trim().toLowerCase();
+  for (const nama of produk) {
+    if ([...dipilih.values()].some((g) => g.produk.includes(nama))) continue;
+    const g = gabung.find((x) => x.produk.includes(nama));
+    if (g) dipilih.set(kunci(g), g);
+  }
+  for (const g of gabung) {
+    if (dipilih.size >= maks) break;
+    if (!dipilih.has(kunci(g))) dipilih.set(kunci(g), g);
+  }
+  return [...dipilih.values()].sort((a, b) => b.produk.length - a.produk.length);
+}
+
 // Harga "wajar": median setelah membuang harga yang terlalu jauh (aksesori, paket besar, dll.)
 export function hargaWajar(harga: number[]): { median: number; min: number; jumlah: number } | null {
   const h = harga.filter((x) => x > 0).sort((a, b) => a - b);

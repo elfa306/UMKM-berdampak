@@ -23,8 +23,9 @@ export async function GET(req: NextRequest) {
     engine: 'google_shopping', q, gl: 'id', hl: 'id', google_domain: 'google.co.id', api_key: key,
   }).toString();
 
-  // Cache 1 jam per kata kunci agar kuota SerpApi hemat
-  const r = await fetch(url, { next: { revalidate: 3600 } });
+  // Cache 10 menit per kata kunci agar kuota SerpApi hemat; tombol "Perbarui" mengirim segar=1 untuk data terbaru
+  const segar = req.nextUrl.searchParams.get('segar') === '1';
+  const r = await fetch(url, segar ? { cache: 'no-store' } : { next: { revalidate: 600 } });
   if (!r.ok) return NextResponse.json({ error: `SerpApi error ${r.status}` }, { status: 502 });
   const data = await r.json();
 

@@ -12,7 +12,7 @@ const items = [
   { href: '/lainnya', ico: '☰', label: 'Lainnya' },
 ];
 // Halaman di bawah menu "Lainnya" tetap menyalakan tab Lainnya
-const turunanLainnya = ['/integrasi', '/pengaturan-usaha', '/inventaris', '/produksi', '/akuntansi'];
+const turunanLainnya = ['/integrasi', '/pengaturan-usaha', '/inventaris'];
 
 export default function BottomNav() {
   const p = usePathname();

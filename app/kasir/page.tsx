@@ -43,6 +43,8 @@ export default function Kasir() {
   const [toast, setToast] = useState('');
   const [qris, setQris] = useState<{ key: string; jumlah: number; invoiceNo?: string; nominalCocok?: boolean; title?: string; detail?: string } | null>(null);
   const [baruIds, setBaruIds] = useState<Set<string>>(new Set());
+  const [hapusTarget, setHapusTarget] = useState<Product | null>(null);
+  const [menghapus, setMenghapus] = useState(false);
   const [suara, setSuara] = useState(true);
   const sudahDiproses = useRef<Set<string>>(new Set());
   const sesiRef = useRef<Sesi | null>(null);
@@ -367,6 +369,28 @@ export default function Kasir() {
     form.reset();
   }
 
+  async function hapusProduk() {
+    if (!hapusTarget) return;
+    setMenghapus(true); setErr('');
+    const target = hapusTarget;
+    const { error } = await supabase.rpc('delete_inventory_product', { p_product_id: target.id });
+    setMenghapus(false);
+    if (error) {
+      if (error.message.includes('product_not_found')) {
+        setProducts((p) => p.filter((x) => x.id !== target.id)); setHapusTarget(null);
+        return setErr('Produk sudah tidak ada. Daftar produk diperbarui.');
+      }
+      if (/delete_inventory_product/.test(error.message) && /not exist|schema cache|Could not find/i.test(error.message)) {
+        return setErr('Fitur hapus produk belum aktif. Jalankan supabase/migration_v16_hapus_produk.sql di Supabase SQL Editor.');
+      }
+      return setErr(error.message);
+    }
+    setProducts((p) => p.filter((x) => x.id !== target.id));
+    setKeranjang((k) => { const { [target.id]: _dibuang, ...sisa } = k; return sisa; });
+    setHapusTarget(null);
+    info(`🗑️ Produk ${target.nama} dihapus.`);
+  }
+
   async function tambahBiaya(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget;
@@ -555,6 +579,17 @@ export default function Kasir() {
         <RpInput name="harga" placeholder="Harga jual (Rp)" />
         <Press className="btn-soft">Simpan produk</Press>
       </form>
+      {products.length > 0 && (
+        <div className="glass-card">
+          <span className="label">Hapus produk</span>
+          {products.map((p) => (
+            <div key={p.id} className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <div className="grow" style={{ minWidth: 0 }}><b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.nama}</b><span className="muted">{rupiah(p.harga)}</span></div>
+              <button type="button" onClick={() => setHapusTarget(p)} aria-label={`Hapus produk ${p.nama}`} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700">Hapus</button>
+            </div>
+          ))}
+        </div>
+      )}
       <Press className="btn-soft" onClick={keluar}>Keluar</Press>
 
       <AnimatePresence>
@@ -574,6 +609,18 @@ export default function Kasir() {
             <p className="mt-3 text-sm leading-6 text-slate-600">QRIS yang tampil adalah gambar contoh dan tidak bisa menerima uang. Melanjutkan akan membuat <b>transaksi simulasi</b> sebesar <b>{rupiah(confirmQrisType === 'statis' ? cartTotal : (invoiceQris?.total ?? 0))}</b>, memperbarui stok yang dilacak, dan memasukkannya ke laporan dengan label <b>QRIS Simulasi</b>.</p>
             <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">Jangan gunakan tombol ini sebagai bukti pembayaran sungguhan. Untuk transaksi nyata, periksa dana di aplikasi merchant terlebih dahulu.</p>
             <div className="mt-4 flex gap-2"><button type="button" disabled={busyQrisConfirm} onClick={() => setConfirmQrisType(null)} className="flex-1 rounded-xl border border-slate-200 px-3 py-3 text-xs font-bold">Kembali</button><button type="button" disabled={busyQrisConfirm} onClick={konfirmasiQrisDibayar} className="flex-1 rounded-xl bg-emerald-700 px-3 py-3 text-xs font-extrabold text-white disabled:opacity-50">{busyQrisConfirm ? 'Menyimpan…' : 'Ya, catat simulasi'}</button></div>
+          </div>
+        </div>
+      )}
+      {hapusTarget && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="hapus-produk-title">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 text-slate-900 shadow-2xl">
+            <h2 id="hapus-produk-title" className="m-0 text-lg font-black">Hapus produk {hapusTarget.nama}?</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Produk hilang dari Kasir, Inventaris, dan Cek Harga. Transaksi yang sudah tercatat tidak berubah.</p>
+            <div className="mt-4 flex gap-2">
+              <button type="button" disabled={menghapus} onClick={() => setHapusTarget(null)} className="flex-1 rounded-xl border border-slate-200 px-3 py-3 text-xs font-bold">Batal</button>
+              <button type="button" disabled={menghapus} onClick={hapusProduk} className="flex-1 rounded-xl bg-red-600 px-3 py-3 text-xs font-bold text-white disabled:opacity-60">{menghapus ? 'Menghapus…' : 'Ya, hapus'}</button>
+            </div>
           </div>
         </div>
       )}

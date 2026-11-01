@@ -1,11 +1,11 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { fetchHari } from '@/lib/data';
 import { rupiah, todayISO, tglPendek } from '@/lib/accounting';
-import { gabungBahan, hargaWajar, type PetaBahan } from '@/lib/bahan';
+import { bahanStatis, gabungBahan, hargaWajar, pilihBahan, type PetaBahan } from '@/lib/bahan';
 import { Press, Rise } from '@/components/Motion';
 import BottomNav from '@/components/BottomNav';
 
@@ -18,7 +18,12 @@ type Kartu = {
   median: number | null; termurah: Item | null;
   perubahan: number | null; pembanding: string | null; // % dibanding snapshot terakhir sebelum hari ini
 };
-type Paket = { kartu: Kartu[]; produk: string[]; sumber: string; punyaRiwayat: boolean; galat?: string };
+type Paket = { kartu: Kartu[]; produk: string[]; tanpaBahan: string[]; sumber: string; punyaRiwayat: boolean; galat?: string };
+
+const MAKS_PRODUK = 12; // produk yang dipantau sekaligus
+const PER_PERMINTAAN = 6; // batas produk per panggilan /api/bahan
+const MAKS_BAHAN = 10; // batas bahan yang dicek harganya (hemat kuota SerpApi)
+const SEGARKAN_MS = 30 * 60 * 1000; // muat ulang penuh jika data lebih tua dari ini saat halaman dibuka kembali
 
 const persenFmt = (n: number) => Math.abs(n).toFixed(1).replace('.', ',') + '%';
 const daftarKata = (a: string[]) => (a.length <= 1 ? a[0] ?? '' : a.slice(0, -1).join(', ') + ' dan ' + a[a.length - 1]);
@@ -37,58 +42,82 @@ export default function Harga() {
   const [toko, setToko] = useState('');
   const [mencari, setMencari] = useState(false);
 
-  const muat = useCallback(async (paksa = false) => {
-    setLoading(true); setErr(''); setKosong(false);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.replace('/login'); return; }
-    const { data: { session } } = await supabase.auth.getSession();
-    const auth = { Authorization: `Bearer ${session?.access_token ?? ''}` };
-    const hariIni = todayISO();
-    const cacheKey = `harga-auto:${user.id}:${hariIni}`;
+  const tandaRef = useRef('');       // tanda daftar produk pada pemuatan terakhir
+  const kapanRef = useRef(0);        // waktu pemuatan terakhir
+  const permintaanRef = useRef(0);   // mencegah hasil lama menimpa hasil baru
 
+  // Selalu membaca daftar produk terbaru dari database (tanpa cache di perangkat).
+  //  paksa : abaikan cache harga di server dan muat ulang walau daftar produk sama
+  //  senyap: pemuatan otomatis (realtime / halaman dibuka kembali) tanpa menutup tampilan lama
+  const muat = useCallback(async (paksa = false, senyap = false) => {
+    const nomor = ++permintaanRef.current;
+    const usang = () => nomor !== permintaanRef.current;
+    if (!senyap) { setLoading(true); setErr(''); setKosong(false); }
     try {
-      // Hemat kuota: hasil hari ini disimpan di perangkat, tombol "Perbarui" untuk memaksa ambil ulang
-      if (!paksa) {
-        try {
-          const tersimpan = localStorage.getItem(cacheKey);
-          const lama = tersimpan ? (JSON.parse(tersimpan) as Paket) : null;
-          if (lama?.punyaRiwayat) { setPaket(lama); setLoading(false); return; }
-        } catch { /* abaikan */ }
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.replace('/login'); return; }
+      const { data: { session } } = await supabase.auth.getSession();
+      const auth = { Authorization: `Bearer ${session?.access_token ?? ''}` };
+      const hariIni = todayISO();
+
+      // 1) Produk dagangan aktif milik pengguna, langsung dari database
+      const { data: prod, error: eProd } = await supabase.from('products').select('nama')
+        .eq('user_id', user.id).eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good']).order('created_at');
+      if (eProd) throw new Error(eProd.message);
+      const semua = (prod ?? []).map((p) => String(p.nama).trim()).filter(Boolean);
+      const tanda = semua.join('\u0001');
+
+      // Pemuatan otomatis tidak perlu mengulang pekerjaan berat bila produk tidak berubah dan data masih baru
+      if (senyap && !paksa && tanda === tandaRef.current && Date.now() - kapanRef.current < SEGARKAN_MS) return;
+
+      if (!semua.length) {
+        if (usang()) return;
+        tandaRef.current = tanda; kapanRef.current = Date.now();
+        setPaket(null); setKosong(true); setLoading(false); return;
       }
 
-      // 1) Produk yang paling sering terjual 30 hari terakhir (jika belum ada penjualan: urutan produk di Kasir)
-      const mulai = new Date(Date.now() - 30 * 864e5).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
-      const [{ data: prod }, hari] = await Promise.all([
-        supabase.from('products').select('nama').order('created_at'),
-        fetchHari(mulai, hariIni),
-      ]);
+      // 2) Urutkan produk: yang paling sering terjual 30 hari terakhir lebih dulu (gagal membaca penjualan tidak boleh menyembunyikan produk)
       const terjual = new Map<string, number>();
-      hari.flatMap((h) => h.txs).filter((t) => t.jenis === 'penjualan')
-        .forEach((t) => terjual.set(t.keterangan, (terjual.get(t.keterangan) ?? 0) + t.qty));
-      const produk = (prod ?? []).map((p) => p.nama as string)
-        .sort((a, b) => (terjual.get(b) ?? 0) - (terjual.get(a) ?? 0)).slice(0, 5);
-      if (!produk.length) { setKosong(true); setLoading(false); return; }
+      try {
+        const mulai = new Date(Date.now() - 30 * 864e5).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+        const hari = await fetchHari(mulai, hariIni);
+        hari.flatMap((h) => h.txs).filter((t) => t.jenis === 'penjualan')
+          .forEach((t) => terjual.set(t.keterangan, (terjual.get(t.keterangan) ?? 0) + t.qty));
+      } catch { /* abaikan: pakai urutan pembuatan produk */ }
+      const produk = [...new Set(semua)].sort((a, b) => (terjual.get(b) ?? 0) - (terjual.get(a) ?? 0)).slice(0, MAKS_PRODUK);
 
-      // 2) Produk -> bahan baku (Gemini, cadangan: kamus bawaan)
-      const rp = await fetch('/api/bahan', { method: 'POST', headers: { 'Content-Type': 'application/json', ...auth }, body: JSON.stringify({ produk }) });
-      const jp = await rp.json();
-      if (!rp.ok) throw new Error(jp.error ?? 'Gagal memetakan bahan');
-      const gabung = gabungBahan(jp.peta as PetaBahan).slice(0, 6);
-      if (!gabung.length) throw new Error('Bahan baku belum bisa ditentukan untuk produk Anda');
+      // 3) Produk -> bahan baku (Gemini, cadangan: kamus bawaan). Dipecah per 6 produk; produk baru tidak ikut terpotong.
+      const kelompok: string[][] = [];
+      for (let i = 0; i < produk.length; i += PER_PERMINTAAN) kelompok.push(produk.slice(i, i + PER_PERMINTAAN));
+      const hasilPeta = await Promise.all(kelompok.map(async (daftar) => {
+        try {
+          const rp = await fetch('/api/bahan', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...auth }, body: JSON.stringify({ produk: daftar }) });
+          const jp = await rp.json();
+          if (!rp.ok) throw new Error(jp.error ?? 'Gagal memetakan bahan');
+          return { peta: jp.peta as PetaBahan, sumber: String(jp.sumber) };
+        } catch {
+          return { peta: daftar.map((p) => ({ produk: p, bahan: bahanStatis(p) })) as PetaBahan, sumber: 'kamus' };
+        }
+      }));
+      const peta = hasilPeta.flatMap((h) => h.peta);
+      const sumber = hasilPeta.every((h) => h.sumber === 'gemini') ? 'gemini' : 'kamus';
+      const tanpaBahan = produk.filter((p) => !peta.some((x) => x.produk === p && x.bahan.length));
+      const gabung = pilihBahan(gabungBahan(peta), produk, MAKS_BAHAN);
 
-      // 3) Harga tiap bahan lewat /api/harga (yang sudah ada)
+      // 4) Harga tiap bahan lewat /api/harga ("Perbarui" melewati cache server)
       const hasil = await Promise.all(gabung.map(async (g) => {
         try {
-          const r = await fetch(`/api/harga?q=${encodeURIComponent(g.bahan.kueri)}`, { headers: auth });
+          const r = await fetch(`/api/harga?q=${encodeURIComponent(g.bahan.kueri)}${paksa ? '&segar=1' : ''}`, { headers: auth, cache: 'no-store' });
           const j = await r.json();
           return r.ok ? (j.items as Item[]) : [];
         } catch { return [] as Item[]; }
       }));
 
-      // 4) Pembanding: harga median terakhir sebelum hari ini
+      // 5) Pembanding: harga median terakhir sebelum hari ini
       const namaBahan = gabung.map((g) => g.bahan.nama);
-      const { data: lama, error: eLama } = await supabase.from('harga_snapshot')
-        .select('bahan,tanggal,harga_median').in('bahan', namaBahan).lt('tanggal', hariIni).order('tanggal', { ascending: false });
+      const { data: lama, error: eLama } = namaBahan.length
+        ? await supabase.from('harga_snapshot').select('bahan,tanggal,harga_median').in('bahan', namaBahan).lt('tanggal', hariIni).order('tanggal', { ascending: false })
+        : { data: [] as { bahan: string; tanggal: string; harga_median: number | string }[], error: null };
       const punyaRiwayat = !eLama;
       const terakhir = new Map<string, { tanggal: string; harga: number }>();
       (lama ?? []).forEach((r) => { if (!terakhir.has(r.bahan)) terakhir.set(r.bahan, { tanggal: r.tanggal, harga: Number(r.harga_median) }); });
@@ -104,20 +133,51 @@ export default function Harga() {
         };
       });
 
-      // 5) Simpan harga hari ini untuk pembanding besok
+      // 6) Simpan harga hari ini untuk pembanding besok
       const baris = kartu.filter((k) => k.median).map((k) => ({
         user_id: user.id, bahan: k.nama, tanggal: hariIni, harga_median: k.median, harga_termurah: k.termurah?.harga ?? null,
       }));
       if (baris.length && punyaRiwayat) await supabase.from('harga_snapshot').upsert(baris, { onConflict: 'user_id,bahan,tanggal' });
 
-      const baru: Paket = { kartu, produk, sumber: jp.sumber, punyaRiwayat, galat: eLama?.message };
-      setPaket(baru);
-      if (punyaRiwayat) { try { localStorage.setItem(cacheKey, JSON.stringify(baru)); } catch { /* abaikan */ } }
-    } catch (e) { setErr((e as Error).message); }
-    setLoading(false);
+      if (usang()) return; // ada pemuatan yang lebih baru, buang hasil ini
+      tandaRef.current = tanda; kapanRef.current = Date.now();
+      setErr(''); setKosong(false);
+      setPaket({ kartu, produk, tanpaBahan, sumber, punyaRiwayat, galat: eLama?.message });
+    } catch (e) {
+      if (!usang() && !senyap) setErr((e as Error).message);
+    }
+    if (!usang()) setLoading(false);
   }, [router]);
 
   useEffect(() => { muat(); }, [muat]);
+
+  // Realtime: pantau perubahan produk (dari perangkat mana pun) dan saat halaman dibuka kembali
+  // (peramban ponsel sering memulihkan halaman lama tanpa menjalankan ulang kode pemuatan).
+  useEffect(() => {
+    let aktif = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let kanal: ReturnType<typeof supabase.channel> | null = null;
+    const jadwal = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { void muat(false, true); }, 800); };
+    const saatTampil = () => { if (document.visibilityState === 'visible') jadwal(); };
+
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!aktif || !user) return;
+      kanal = supabase.channel(`harga-produk-${user.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'products', filter: `user_id=eq.${user.id}` }, jadwal)
+        .subscribe();
+    });
+    document.addEventListener('visibilitychange', saatTampil);
+    window.addEventListener('pageshow', jadwal);
+    window.addEventListener('online', jadwal);
+    return () => {
+      aktif = false;
+      if (timer) clearTimeout(timer);
+      if (kanal) void supabase.removeChannel(kanal);
+      document.removeEventListener('visibilitychange', saatTampil);
+      window.removeEventListener('pageshow', jadwal);
+      window.removeEventListener('online', jadwal);
+    };
+  }, [muat]);
 
   // Kalimat saran: bahan dengan perubahan terbesar (minimal 3%)
   const saran = useMemo(() => {
@@ -167,7 +227,7 @@ export default function Harga() {
       {kosong && (
         <div className="glass-card">
           <b>Belum ada produk</b>
-          <p className="muted" style={{ margin: 0 }}>Tambahkan produk dagangan di halaman Kasir, nanti bahan bakunya otomatis dipantau di sini.</p>
+          <p className="muted" style={{ margin: 0 }}>Tambahkan produk dagangan di halaman Kasir atau Inventaris, nanti bahan bakunya otomatis dipantau di sini.</p>
           <Link href="/kasir" className="btn-soft" style={{ textAlign: 'center' }}>Ke Kasir</Link>
         </div>
       )}
@@ -184,7 +244,12 @@ export default function Harga() {
                   {saran.teks}
                 </div>
               )}
-              {!paket.kartu.some((k) => k.perubahan !== null) && (
+              {paket.tanpaBahan.length > 0 && (
+                <p className="muted" style={{ margin: 0 }}>
+                  Produk terdeteksi, tetapi bahan bakunya belum bisa ditentukan: <b>{daftarKata(paket.tanpaBahan)}</b>. Coba tekan Perbarui, atau cari bahannya lewat “Cari bahan lain”.
+                </p>
+              )}
+              {paket.kartu.length > 0 && !paket.kartu.some((k) => k.perubahan !== null) && (
                 <p className="muted" style={{ margin: 0 }}>
                   {paket.punyaRiwayat
                     ? 'Perubahan harga (naik/turun) mulai tampil besok, setelah ada harga hari ini sebagai pembanding.'

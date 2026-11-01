@@ -145,7 +145,11 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
         return;
       }
       setForm(keForm(profil, user.user_metadata?.nama_usaha ?? ''));
-      if (!editMode && sudahLengkap(profil)) router.replace('/kasir');
+      if (!editMode && sudahLengkap(profil)) {
+        // Profil sudah lengkap: bila belum punya produk, lanjutkan ke pengisian inventaris awal
+        const { count } = await supabase.from('products').select('id', { count: 'exact', head: true }).eq('user_id', user.id).eq('aktif', true);
+        router.replace(count === 0 ? '/onboarding/inventaris' : '/kasir');
+      }
     } catch (e) {
       setError((e as Error).message || 'Gagal memuat profil usaha.');
     } finally {
@@ -225,7 +229,7 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
       if (editMode) {
         setNotice('Profil usaha berhasil diperbarui.');
       } else {
-        router.replace('/kasir');
+        router.replace('/onboarding/inventaris');
       }
     } catch (e) {
       setError((e as Error).message || 'Gagal menyimpan profil usaha.');
