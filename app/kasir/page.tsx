@@ -17,7 +17,7 @@ import { Press, Rise } from '@/components/Motion';
 
 type Sesi = { id: string; modal_harian: number };
 type QrisInvoiceItem = { productId: string; nama: string; harga: number; qty: number; subtotal: number };
-type QrisInvoice = { id: string; invoice_no: string; total: number; items: QrisInvoiceItem[]; created_at: string; notificationMatch?: boolean };
+type QrisInvoice = { id: string; invoice_no: string; total: number; items: QrisInvoiceItem[]; created_at: string; status: 'pending' | 'paid_manual'; paid_at?: string | null; notificationMatch?: boolean };
 const jam = (iso: string) => new Date(iso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' });
 const keTx = (r: TxBaris | Tx): Tx => ({ ...(r as Tx), jumlah: Number(r.jumlah) });
 
@@ -34,10 +34,14 @@ export default function Kasir() {
   const [jenisQris, setJenisQris] = useState<'statis' | 'dinamis'>('statis');
   const [keranjang, setKeranjang] = useState<Record<string, number>>({});
   const [invoiceQris, setInvoiceQris] = useState<QrisInvoice | null>(null);
+  const [confirmQrisType, setConfirmQrisType] = useState<'statis' | 'dinamis' | null>(null);
+  const [busyQrisConfirm, setBusyQrisConfirm] = useState(false);
+  const [staticQrisConfirmation, setStaticQrisConfirmation] = useState<{ total: number; count: number } | null>(null);
+  const staticConfirmationKeyRef = useRef<string | null>(null);
   const [ready, setReady] = useState(false);
   const [err, setErr] = useState('');
   const [toast, setToast] = useState('');
-  const [qris, setQris] = useState<{ key: string; jumlah: number; invoiceNo?: string; nominalCocok?: boolean } | null>(null);
+  const [qris, setQris] = useState<{ key: string; jumlah: number; invoiceNo?: string; nominalCocok?: boolean; title?: string; detail?: string } | null>(null);
   const [baruIds, setBaruIds] = useState<Set<string>>(new Set());
   const [suara, setSuara] = useState(true);
   const sudahDiproses = useRef<Set<string>>(new Set());
@@ -82,7 +86,7 @@ export default function Kasir() {
       await importQris(s.data.id);
       const [t, invoiceResult] = await Promise.all([
         supabase.from('transactions').select('*').eq('session_id', s.data.id).order('created_at'),
-        supabase.from('qris_invoice_drafts').select('id,invoice_no,total,items,created_at').eq('session_id', s.data.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('qris_invoice_drafts').select('id,invoice_no,total,items,created_at,status,paid_at').eq('session_id', s.data.id).in('status', ['pending', 'paid_manual']).order('created_at', { ascending: false }).limit(1).maybeSingle(),
       ]);
       setTxs((t.data ?? []).map((x) => ({ ...x, jumlah: Number(x.jumlah) })) as Tx[]);
       if (invoiceResult.error) {
@@ -96,7 +100,7 @@ export default function Kasir() {
         setInvoiceQris({
           id: saved.id, invoice_no: saved.invoice_no, total: Number(saved.total),
           items: Array.isArray(saved.items) ? saved.items as QrisInvoiceItem[] : [],
-          created_at: saved.created_at, notificationMatch: false,
+          created_at: saved.created_at, status: saved.status as 'pending' | 'paid_manual', paid_at: saved.paid_at, notificationMatch: false,
         });
       } else {
         setInvoiceQris(null);
@@ -200,6 +204,8 @@ export default function Kasir() {
   function pilihProduk(p: Product) {
     if (metode === 'qris') {
       if (invoiceQris) { info('Tutup invoice QRIS yang sedang terbuka sebelum membuat keranjang baru.'); return; }
+      staticConfirmationKeyRef.current = null;
+      setStaticQrisConfirmation(null);
       setKeranjang((current) => ({ ...current, [p.id]: (current[p.id] ?? 0) + 1 }));
       return;
     }
@@ -207,6 +213,7 @@ export default function Kasir() {
   }
 
   function ubahJumlahKeranjang(productId: string, delta: number) {
+    staticConfirmationKeyRef.current = null;
     setKeranjang((current) => {
       const next = { ...current };
       const value = (next[productId] ?? 0) + delta;
@@ -235,7 +242,7 @@ export default function Kasir() {
     const invoice: QrisInvoice = {
       id: data.id, invoice_no: data.invoice_no, total: Number(data.total),
       items: Array.isArray(data.items) ? data.items as QrisInvoiceItem[] : items,
-      created_at: data.created_at, notificationMatch: false,
+      created_at: data.created_at, status: 'pending', paid_at: null, notificationMatch: false,
     };
     setInvoiceQris(invoice);
     setKeranjang({});
@@ -247,13 +254,96 @@ export default function Kasir() {
     const { error } = await supabase.from('qris_invoice_drafts')
       .update({ status: 'cancelled' }).eq('id', invoiceQris.id).eq('status', 'pending');
     if (error) return setErr(`Invoice tidak dapat ditutup: ${error.message}`);
+    const alreadyPaid = invoiceQris.status === 'paid_manual';
     setInvoiceQris(null);
-    info('Invoice QRIS ditutup. Tidak ada penjualan atau stok yang dicatat.');
+    info(alreadyPaid ? 'Invoice ditutup. Pencatatan simulasi tetap tersimpan.' : 'Invoice QRIS ditutup tanpa membuat transaksi.');
+  }
+
+  function mintaKonfirmasiQris(type: 'statis' | 'dinamis') {
+    if (busyQrisConfirm) return;
+    if (!sesi) return setErr('Mulai sesi penjualan terlebih dahulu.');
+    if (type === 'statis' && !cartLines.length) return setErr('Tambahkan produk ke keranjang sebelum mencatat pembayaran.');
+    if (type === 'dinamis' && (!invoiceQris || invoiceQris.status !== 'pending')) return setErr('Invoice QRIS dinamis tidak tersedia atau sudah diproses.');
+    if (type === 'statis' && !staticConfirmationKeyRef.current) staticConfirmationKeyRef.current = crypto.randomUUID();
+    setConfirmQrisType(type);
+  }
+
+  async function konfirmasiQrisDibayar() {
+    if (!confirmQrisType || !sesi || busyQrisConfirm) return;
+    const type = confirmQrisType;
+    const total = type === 'statis' ? cartTotal : (invoiceQris?.total ?? 0);
+    const count = type === 'statis'
+      ? cartLines.reduce((sum, line) => sum + line.qty, 0)
+      : (invoiceQris?.items.reduce((sum, item) => sum + item.qty, 0) ?? 0);
+    if (total <= 0) return setErr('Total pembayaran harus lebih dari nol.');
+
+    setBusyQrisConfirm(true);
+    setErr('');
+    const { data, error } = await supabase.rpc('confirm_qris_payment_simulation', {
+      p_session_id: sesi.id,
+      p_qris_type: type,
+      p_items: type === 'statis' ? cartLines.map(({ product, qty }) => ({ productId: product.id, qty })) : null,
+      p_invoice_id: type === 'dinamis' ? invoiceQris?.id : null,
+      p_confirmation_key: type === 'statis' ? staticConfirmationKeyRef.current : null,
+    });
+    setBusyQrisConfirm(false);
+    if (error) {
+      const message = error.message || 'Konfirmasi pembayaran gagal.';
+      if (message.includes('insufficient_stock')) setErr('Stok salah satu produk tidak mencukupi. Tidak ada transaksi yang dicatat.');
+      else if (message.includes('confirm_qris_payment_simulation')) setErr('Fitur belum tersedia. Jalankan migration_v15_qris_simulation_confirmation.sql di Supabase terlebih dahulu.');
+      else setErr(`Pembayaran simulasi gagal dicatat: ${message}`);
+      return;
+    }
+
+    const recordedTotal = Number(data?.total ?? total);
+    const rows = Array.isArray(data?.transactions) ? data.transactions as Tx[] : [];
+    if (rows.length) {
+      setTxs((current) => {
+        const ids = new Set(current.map((tx) => tx.id));
+        return [...current, ...rows.filter((tx) => !ids.has(tx.id)).map(keTx)];
+      });
+      setBaruIds((current) => new Set([...current, ...rows.map((tx) => tx.id)]));
+      setTimeout(() => setBaruIds((current) => {
+        const next = new Set(current);
+        rows.forEach((tx) => next.delete(tx.id));
+        return next;
+      }), 2600);
+    }
+
+    if (type === 'dinamis') {
+      setInvoiceQris((current) => current ? { ...current, status: 'paid_manual', paid_at: new Date().toISOString() } : current);
+    } else {
+      setKeranjang({});
+      setStaticQrisConfirmation({ total: recordedTotal, count });
+      staticConfirmationKeyRef.current = null;
+    }
+
+    setConfirmQrisType(null);
+    const label = type === 'statis' ? 'QRIS Statis' : `QRIS Dinamis ${invoiceQris?.invoice_no ?? ''}`.trim();
+    info(`✅ ${label} tercatat sebagai pembayaran simulasi sebesar ${rupiah(recordedTotal)}.`);
+    const key = `qris-sim-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`;
+    setQris({
+      key,
+      jumlah: recordedTotal,
+      title: 'Pembayaran QRIS Tercatat',
+      detail: `${label} · ${count} item · simulasi manual tersimpan di transaksi dan laporan.`,
+    });
+    kaChing();
+    setTimeout(() => setQris((current) => current?.key === key ? null : current), 5000);
   }
 
   async function batalTerakhir() {
     const last = txs[txs.length - 1];
     if (!last) return;
+    if (last.payment_source === 'qris_simulation') {
+      const { data, error } = await supabase.rpc('cancel_qris_payment_simulation', { p_transaction_id: last.id });
+      if (error) return setErr(`Pembatalan QRIS simulasi gagal: ${error.message}`);
+      const ids = Array.isArray(data?.transaction_ids) ? data.transaction_ids as string[] : [last.id];
+      setTxs((current) => current.filter((tx) => !ids.includes(tx.id)));
+      setInvoiceQris(null);
+      info(`✅ Pembayaran QRIS simulasi dibatalkan. ${Number(data?.cancelled_count ?? ids.length)} transaksi dibatalkan dan stok dikembalikan.`);
+      return;
+    }
     if (last.product_id && last.payment_source === 'cashier') {
       const { error } = await supabase.rpc('cancel_inventory_sale', { p_transaction_id: last.id });
       if (error) return setErr(error.message);
@@ -367,7 +457,7 @@ export default function Kasir() {
                 <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-slate-900">
                   <div className="flex items-center justify-between gap-3">
                     <div><b className="text-sm">Keranjang QRIS</b><p className="m-0 mt-1 text-[11px] text-slate-500">{cartLines.reduce((sum, line) => sum + line.qty, 0)} item dipilih</p></div>
-                    <button type="button" onClick={() => setKeranjang({})} disabled={!cartLines.length || !!invoiceQris} className="rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-600 disabled:opacity-40">Kosongkan</button>
+                    <button type="button" onClick={() => { staticConfirmationKeyRef.current = null; setKeranjang({}); }} disabled={!cartLines.length || !!invoiceQris} className="rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-600 disabled:opacity-40">Kosongkan</button>
                   </div>
                   {cartLines.length ? (
                     <div className="mt-3 space-y-2">
@@ -391,21 +481,25 @@ export default function Kasir() {
                       <div className="text-center"><b className="text-sm text-emerald-900">QRIS Statis · Tampil Langsung</b><p className="mt-1 text-[10px] text-emerald-800">Tidak membuat invoice. Pelanggan biasanya memasukkan nominal secara manual.</p></div>
                       <img src="/qris-contoh.png" alt="QRIS contoh statis yang tidak dapat menerima pembayaran" className="mx-auto mt-3 aspect-square w-full max-w-[250px] rounded-xl bg-white object-contain p-2" />
                       <div className="mt-2 text-center text-sm font-black text-slate-900">Total pilihan produk: {rupiah(cartTotal)}</div>
-                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[10px] leading-5 text-amber-900">Gambar ini hanya contoh visual, bukan QRIS aktif. Tidak dapat dipindai untuk pembayaran dan tidak mencatat transaksi atau mengurangi stok.</p>
+                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[10px] leading-5 text-amber-900">Gambar ini hanya contoh visual dan tidak dapat menerima pembayaran. Tombol di bawah hanya membuat pencatatan simulasi, bukan bukti dana masuk.</p>
+                      <button type="button" onClick={() => mintaKonfirmasiQris('statis')} disabled={!cartLines.length || busyQrisConfirm} className="mt-3 w-full rounded-xl bg-emerald-700 px-4 py-3 text-xs font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-40">{busyQrisConfirm ? 'MENYIMPAN…' : 'TANDAI SUDAH DIBAYAR · SIMULASI'}</button>
+                      {staticQrisConfirmation && <p className="mt-2 rounded-xl border border-emerald-200 bg-white p-2 text-[10px] leading-5 text-emerald-900">✅ Pembayaran simulasi terakhir tercatat: {rupiah(staticQrisConfirmation.total)} untuk {staticQrisConfirmation.count} item. Cek bagian Transaksi terakhir dan Laporan.</p>}
                     </div>
                   ) : (
                     invoiceQris ? (
                       <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3">
-                        <div className="flex items-center justify-between gap-2"><b className="text-sm text-amber-950">Invoice QRIS Dinamis</b><span className="rounded-full bg-amber-100 px-2 py-1 text-[9px] font-black text-amber-900">MENUNGGU</span></div>
+                        <div className="flex items-center justify-between gap-2"><b className="text-sm text-amber-950">Invoice QRIS Dinamis</b><span className={`rounded-full px-2 py-1 text-[9px] font-black ${invoiceQris.status === 'paid_manual' ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-900'}`}>{invoiceQris.status === 'paid_manual' ? 'LUNAS · SIMULASI' : 'MENUNGGU'}</span></div>
                         <p className="mt-2 text-xs font-bold text-amber-900">{invoiceQris.invoice_no}</p>
                         <div className="mt-2 space-y-1 rounded-xl bg-white p-3">
                           {invoiceQris.items.map((item, index) => <div key={`${item.productId}-${index}`} className="flex justify-between gap-3 text-[11px]"><span>{item.nama} × {item.qty}</span><b>{rupiah(item.subtotal)}</b></div>)}
                           <div className="mt-2 flex justify-between border-t border-slate-100 pt-2 text-sm"><b>Total invoice</b><strong>{rupiah(invoiceQris.total)}</strong></div>
                         </div>
                         <img src="/qris-contoh.png" alt="QRIS dinamis contoh untuk tampilan invoice" className="mx-auto mt-3 aspect-square w-full max-w-[250px] rounded-xl bg-white object-contain p-2" />
-                        <p className="mt-2 rounded-xl border border-amber-200 bg-white p-2 text-[10px] leading-5 text-amber-900">QR di atas tetap gambar contoh yang sama, bukan QR dinamis yang membawa nominal atau reference invoice. Invoice ini belum dibayar dan tidak mengubah stok, transaksi, maupun jurnal.</p>
-                        {invoiceQris.notificationMatch && <p className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-2 text-[10px] leading-5 text-emerald-900">Ada notifikasi QRIS GoPay/MacroDroid dengan nominal yang sama. Cocokkan waktu dan mutasi di GoPay Merchant. Notifikasi tidak membawa nomor invoice, jadi invoice tidak otomatis dinyatakan lunas.</p>}
-                        <button type="button" onClick={tutupInvoiceQris} className="mt-3 w-full rounded-xl border border-amber-300 bg-white px-3 py-2.5 text-xs font-extrabold text-amber-950">Tutup / Batalkan Invoice</button>
+                        <p className="mt-2 rounded-xl border border-amber-200 bg-white p-2 text-[10px] leading-5 text-amber-900">QR di atas tetap gambar contoh yang sama, bukan QR dinamis yang membawa nominal atau reference invoice. Tombol konfirmasi hanya mencatat simulasi manual; tidak memverifikasi dana dari bank atau GoPay Merchant.</p>
+                        {invoiceQris.notificationMatch && invoiceQris.status === 'pending' && <p className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-2 text-[10px] leading-5 text-emerald-900">Ada notifikasi GoPay/MacroDroid dengan nominal yang sama. Cocokkan waktu dan mutasi di aplikasi merchant sebelum memakai konfirmasi manual.</p>}
+                        {invoiceQris.status === 'pending' && <button type="button" onClick={() => mintaKonfirmasiQris('dinamis')} disabled={busyQrisConfirm} className="mt-3 w-full rounded-xl bg-emerald-700 px-4 py-3 text-xs font-extrabold text-white disabled:opacity-40">{busyQrisConfirm ? 'MENYIMPAN…' : 'TANDAI SUDAH DIBAYAR · SIMULASI'}</button>}
+                        {invoiceQris.status === 'paid_manual' && <p className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-2 text-[10px] leading-5 text-emerald-900">✅ Pembayaran simulasi tercatat{invoiceQris.paid_at ? ` pada ${jam(invoiceQris.paid_at)}` : ''}. Transaksi dan jurnal sudah dibuat.</p>}
+                        <button type="button" onClick={tutupInvoiceQris} className="mt-3 w-full rounded-xl border border-amber-300 bg-white px-3 py-2.5 text-xs font-extrabold text-amber-950">{invoiceQris.status === 'pending' ? 'Tutup / Batalkan Invoice' : 'Tutup Invoice'}</button>
                       </div>
                     ) : (
                       <button type="button" onClick={buatInvoiceQris} disabled={!cartLines.length} className="mt-4 w-full rounded-xl bg-emerald-700 px-4 py-3 text-xs font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-40">BUAT INVOICE QRIS DINAMIS</button>
@@ -441,7 +535,7 @@ export default function Kasir() {
                   <motion.div key={t.id} layout initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}
                     className={`mut ${baruIds.has(t.id) ? 'baru' : ''}`}>
                     <div className={`mut-ico ${masuk ? 'in' : 'out'}`}>{masuk ? '↓' : '↑'}</div>
-                    <div className="grow"><b>{t.keterangan}</b><div className="muted">{t.metode ? t.metode.toUpperCase() : 'Biaya'} · {jam(t.created_at)}</div></div>
+                    <div className="grow"><b>{t.keterangan}</b><div className="muted">{t.payment_source === 'qris_simulation' ? 'QRIS SIMULASI' : t.metode ? t.metode.toUpperCase() : 'Biaya'} · {jam(t.created_at)}</div></div>
                     <div className={`mut-amt ${masuk ? 'in' : 'out'}`}>{rupiahTanda(t.jumlah, masuk)}</div>
                   </motion.div>
                 );
@@ -469,10 +563,20 @@ export default function Kasir() {
             initial={{ y: -90, x: '-50%', opacity: 0, scale: 0.9 }} animate={{ y: 0, x: '-50%', opacity: 1, scale: 1 }} exit={{ y: -90, x: '-50%', opacity: 0 }}
             transition={{ type: 'spring', stiffness: 380, damping: 22 }}>
             <span className="ico">🔔</span>
-            <div><b>{qris.nominalCocok ? 'Notifikasi QRIS Sesuai Nominal' : 'Pembayaran QRIS Masuk'}</b><strong>{rupiah(qris.jumlah)}!</strong>{qris.invoiceNo && <small style={{ display: 'block', marginTop: 3, fontSize: 10 }}>Nominal sama dengan {qris.invoiceNo}. Periksa mutasi GoPay Merchant; invoice tidak otomatis lunas.</small>}</div>
+            <div><b>{qris.title || (qris.nominalCocok ? 'Notifikasi QRIS Sesuai Nominal' : 'Pembayaran QRIS Masuk')}</b><strong>{rupiah(qris.jumlah)}!</strong>{qris.detail && <small style={{ display: 'block', marginTop: 3, fontSize: 10 }}>{qris.detail}</small>}{qris.invoiceNo && <small style={{ display: 'block', marginTop: 3, fontSize: 10 }}>Nominal sama dengan {qris.invoiceNo}. Periksa mutasi GoPay Merchant; invoice tidak otomatis lunas.</small>}</div>
           </motion.div>
         )}
       </AnimatePresence>
+      {confirmQrisType && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="qris-confirm-title">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 text-slate-900 shadow-2xl">
+            <div className="flex items-center gap-2"><span className="text-2xl">🔔</span><h2 id="qris-confirm-title" className="m-0 text-lg font-black">Konfirmasi Pembayaran QRIS</h2></div>
+            <p className="mt-3 text-sm leading-6 text-slate-600">QRIS yang tampil adalah gambar contoh dan tidak bisa menerima uang. Melanjutkan akan membuat <b>transaksi simulasi</b> sebesar <b>{rupiah(confirmQrisType === 'statis' ? cartTotal : (invoiceQris?.total ?? 0))}</b>, memperbarui stok yang dilacak, dan memasukkannya ke laporan dengan label <b>QRIS Simulasi</b>.</p>
+            <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">Jangan gunakan tombol ini sebagai bukti pembayaran sungguhan. Untuk transaksi nyata, periksa dana di aplikasi merchant terlebih dahulu.</p>
+            <div className="mt-4 flex gap-2"><button type="button" disabled={busyQrisConfirm} onClick={() => setConfirmQrisType(null)} className="flex-1 rounded-xl border border-slate-200 px-3 py-3 text-xs font-bold">Kembali</button><button type="button" disabled={busyQrisConfirm} onClick={konfirmasiQrisDibayar} className="flex-1 rounded-xl bg-emerald-700 px-3 py-3 text-xs font-extrabold text-white disabled:opacity-50">{busyQrisConfirm ? 'Menyimpan…' : 'Ya, catat simulasi'}</button></div>
+          </div>
+        </div>
+      )}
       {toast && <div className="toast">{toast}</div>}
       <BottomNav />
     </div>

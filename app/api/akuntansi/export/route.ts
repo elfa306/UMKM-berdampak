@@ -133,14 +133,15 @@ export async function GET(request: Request) {
     const typeLabel = BUSINESS_LABEL[kind];
     const paymentMethod = String(profile?.metode_pembayaran || 'manual');
     const paymentMethodLabel = paymentMethod === 'gopay_macrodroid'
-      ? 'GoPay Merchant melalui MacroDroid (pembayaran nyata yang tercatat)'
-      : 'Pencatatan manual; QRIS statis/dinamis di kasir hanya pratinjau contoh';
+      ? 'GoPay Merchant melalui MacroDroid (pembayaran nyata yang tercatat); QRIS contoh manual dipisahkan sebagai simulasi'
+      : 'Pencatatan manual; tombol QRIS contoh dapat membuat transaksi simulasi terpisah dari saldo bank nyata';
     const entryIdsWithRevenue = new Set(lines.filter((line) => line.account_type === 'revenue' && money(line.credit) > 0).map((line) => line.entry_id));
     const revenueEntries = new Set(entries.filter((entry) => entry.source_type === 'transaction' && entryIdsWithRevenue.has(entry.id)).map((entry) => entry.id));
     const cashReceipts = lines.filter((line) => revenueEntries.has(line.entry_id) && line.account_code === '1000').reduce((sum, line) => sum + money(line.debit), 0);
     const qrisReceipts = lines.filter((line) => revenueEntries.has(line.entry_id) && line.account_code === '1010').reduce((sum, line) => sum + money(line.debit), 0);
+    const qrisSimulationReceipts = lines.filter((line) => revenueEntries.has(line.entry_id) && line.account_code === '1090').reduce((sum, line) => sum + money(line.debit), 0);
     const entryById = new Map(entries.map((entry) => [entry.id, entry]));
-    const paymentDetails = lines.filter((line) => revenueEntries.has(line.entry_id) && ['1000', '1010'].includes(line.account_code) && money(line.debit) > 0);
+    const paymentDetails = lines.filter((line) => revenueEntries.has(line.entry_id) && ['1000', '1010', '1090'].includes(line.account_code) && money(line.debit) > 0);
     const ExcelJS = (await import('exceljs')).default;
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'UMKM Berdampak';
@@ -158,7 +159,7 @@ export async function GET(request: Request) {
     summary.addRow(['Nama usaha', name, 'Tipe usaha', typeLabel]);
     summary.addRow(['Bidang usaha', String(profile?.bidang_usaha || 'Belum diisi'), 'Bentuk usaha', legalForm]);
     summary.addRow(['Memiliki persediaan', profile?.memiliki_persediaan === true ? 'Ya' : profile?.memiliki_persediaan === false ? 'Tidak' : 'Belum diisi', 'Jumlah jurnal bulan ini', entries.length]);
-    summary.addRow(['Metode pembayaran terdaftar', paymentMethodLabel, 'Pembayaran QRIS contoh', 'Tidak dihitung sebagai transaksi']);
+    summary.addRow(['Metode pembayaran terdaftar', paymentMethodLabel, 'QRIS contoh', 'Pratinjau; pencatatan manual diberi label simulasi']);
     r = (summary.lastRow?.number ?? summary.rowCount) + 2;
     r = addSection(summary, r, 'LAPORAN LABA RUGI', 2);
     const revenueLabel = kind === 'jasa' ? 'Pendapatan jasa' : kind === 'campuran' ? 'Pendapatan produk dan jasa' : 'Pendapatan penjualan';
@@ -176,9 +177,10 @@ export async function GET(request: Request) {
     r = (summary.lastRow?.number ?? summary.rowCount) + 2;
     r = addSection(summary, r, 'RINCIAN PENERIMAAN PENJUALAN', 2);
     summary.addRow(['Penerimaan penjualan tunai', cashReceipts]);
-    summary.addRow(['Penerimaan penjualan Bank / QRIS', qrisReceipts]);
-    summary.addRow(['Total penerimaan penjualan teridentifikasi', cashReceipts + qrisReceipts]);
-    summary.addRow(['Catatan QRIS', 'QRIS contoh statis/dinamis hanya pratinjau; tidak masuk jurnal atau penerimaan.']);
+    summary.addRow(['Penerimaan penjualan Bank / QRIS nyata', qrisReceipts]);
+    summary.addRow(['Penerimaan QRIS simulasi (bukan saldo bank)', qrisSimulationReceipts]);
+    summary.addRow(['Total penerimaan nyata teridentifikasi', cashReceipts + qrisReceipts]);
+    summary.addRow(['Catatan QRIS', 'Gambar QRIS adalah contoh. Konfirmasi manual masuk ke akun Penerimaan QRIS Simulasi, terpisah dari saldo bank nyata. Pendapatan simulasi tetap terlihat pada laba rugi sebagai data latihan.']);
     r = (summary.lastRow?.number ?? summary.rowCount) + 2;
     r = addSection(summary, r, 'ARUS KAS BULANAN', 2);
     const cf = snapshot.cashFlow;
@@ -200,7 +202,7 @@ export async function GET(request: Request) {
     styleTableHeader(trial.getRow(3));
     const trialRows = (snapshot.monthlyTrialBalance as TrialRow[]).map((a) => [a.code, a.name, a.type, money(a.debit), money(a.credit), money(a.balance)]);
     trialRows.forEach((row) => trial.addRow(row));
-    const trialEnd = Math.max(3, (trial.lastRow?.number ?? trial.rowCount));
+    const trialEnd = Math.max(3, trial.lastRow?.number ?? trial.rowCount);
     styleDataRows(trial, 4, trialEnd, [4, 5, 6]);
     trial.views = [{ state: 'frozen', ySplit: 3, showGridLines: false }];
     trial.autoFilter = { from: { row: 3, column: 1 }, to: { row: trialEnd, column: 6 } };
@@ -216,7 +218,7 @@ export async function GET(request: Request) {
       return entry ? [entry.entry_date, entry.entry_no, SOURCE_LABEL[entry.source_type] || entry.source_type, entry.description, line.account_code, line.account_name, line.account_type, money(line.debit), money(line.credit)] : null;
     }).filter((row): row is (string | number)[] => row !== null);
     journalRows.forEach((row) => journal.addRow(row));
-    const journalEnd = Math.max(3, (journal.lastRow?.number ?? journal.rowCount));
+    const journalEnd = Math.max(3, journal.lastRow?.number ?? journal.rowCount);
     styleDataRows(journal, 4, journalEnd, [8, 9]);
     journal.views = [{ state: 'frozen', ySplit: 3, showGridLines: false }];
     journal.autoFilter = { from: { row: 3, column: 1 }, to: { row: journalEnd, column: 9 } };
@@ -224,14 +226,15 @@ export async function GET(request: Request) {
     // 4. Rincian penerimaan berdasarkan akun pembayaran yang benar-benar dijurnal.
     const payments = workbook.addWorksheet('Pembayaran dan QRIS');
     payments.columns = [{ width: 16 }, { width: 22 }, { width: 42 }, { width: 22 }, { width: 22 }];
-    addHeading(payments, 'RINCIAN PEMBAYARAN', `${name} · ${month} · Hanya penerimaan dari jurnal transaksi nyata`, 5);
+    addHeading(payments, 'RINCIAN PEMBAYARAN', `${name} · ${month} · Penerimaan nyata dipisahkan dari QRIS simulasi`, 5);
     let paymentRow = 4;
     paymentRow = addSection(payments, paymentRow, 'RINGKASAN METODE PEMBAYARAN', 2);
     payments.addRow(['Metode pada profil usaha', paymentMethodLabel]);
     payments.addRow(['Penerimaan tunai', cashReceipts]);
-    payments.addRow(['Penerimaan Bank / QRIS', qrisReceipts]);
-    payments.addRow(['Total penerimaan teridentifikasi', cashReceipts + qrisReceipts]);
-    payments.addRow(['QRIS statis/dinamis contoh', 'Pratinjau saja — tidak menerima pembayaran dan tidak masuk jurnal']);
+    payments.addRow(['Penerimaan Bank / QRIS nyata', qrisReceipts]);
+    payments.addRow(['Penerimaan QRIS Simulasi (bukan saldo bank)', qrisSimulationReceipts]);
+    payments.addRow(['Total penerimaan nyata teridentifikasi', cashReceipts + qrisReceipts]);
+    payments.addRow(['QRIS statis/dinamis contoh', 'Gambar pratinjau; konfirmasi manual masuk ke akun QRIS Simulasi, bukan saldo bank']);
     paymentRow = (payments.lastRow?.number ?? payments.rowCount) + 2;
     payments.mergeCells(paymentRow, 1, paymentRow, 5);
     payments.getCell(paymentRow, 1).value = 'DETAIL PENERIMAAN PENJUALAN';
@@ -242,9 +245,9 @@ export async function GET(request: Request) {
     for (const line of paymentDetails) {
       const entry = entryById.get(line.entry_id);
       if (!entry) continue;
-      payments.addRow([entry.entry_date, entry.entry_no, entry.description, line.account_code === '1010' ? 'Bank / QRIS' : 'Tunai', money(line.debit)]);
+      payments.addRow([entry.entry_date, entry.entry_no, entry.description, line.account_code === '1090' ? 'QRIS Simulasi (bukan saldo bank)' : line.account_code === '1010' ? 'Bank / QRIS' : 'Tunai', money(line.debit)]);
     }
-    const paymentEnd = Math.max(paymentRow + 1, (payments.lastRow?.number ?? payments.rowCount));
+    const paymentEnd = Math.max(paymentRow + 1, payments.lastRow?.number ?? payments.rowCount);
     styleDataRows(payments, 4, paymentEnd, [2, 5]);
     payments.views = [{ state: 'frozen', ySplit: paymentRow + 1, showGridLines: false }];
     payments.autoFilter = { from: { row: paymentRow + 1, column: 1 }, to: { row: paymentEnd, column: 5 } };
@@ -259,14 +262,14 @@ export async function GET(request: Request) {
     let selectedAccounts: TrialRow[] = [];
     let metrics: Array<[string, number, string]> = [];
     if (kind === 'retail') {
-      selectedAccounts = monthly.filter((a) => ['1200', '1210', '1220', '1230', '5000', '4000', '6000', '7000'].includes(a.code) || a.code.startsWith('12'));
+      selectedAccounts = monthly.filter((a) => ['1200', '1210', '1220', '1230', '5000', '4000', '6000', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
       metrics = [
         ['Penjualan barang', money(snapshot.profitLoss.revenue), 'Pendapatan yang masuk ke akun pendapatan.'],
         ['HPP barang dagangan', money(snapshot.profitLoss.cogs), 'Biaya pokok atas barang yang terjual.'],
         ['Laba kotor perdagangan', money(snapshot.profitLoss.grossProfit), 'Pendapatan dikurangi HPP.'],
       ];
     } else if (kind === 'manufaktur') {
-      selectedAccounts = monthly.filter((a) => ['1210', '1220', '1230', '2110', '2120', '5000', '5100', '4000', '6000', '7000'].includes(a.code) || a.code.startsWith('12'));
+      selectedAccounts = monthly.filter((a) => ['1210', '1220', '1230', '2110', '2120', '5000', '5100', '4000', '6000', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
       metrics = [
         ['Penjualan produk', money(snapshot.profitLoss.revenue), 'Pendapatan dari penjualan hasil produksi.'],
         ['HPP produk terjual', money(snapshot.profitLoss.cogs), 'Biaya pokok produk yang sudah terjual.'],
@@ -277,7 +280,7 @@ export async function GET(request: Request) {
         ['Utang biaya overhead (mutasi periode)', money(monthly.find((a) => a.code === '2120')?.balance), 'Mutasi pencatatan overhead produksi.'],
       ];
     } else if (kind === 'jasa') {
-      selectedAccounts = monthly.filter((a) => ['4000', '5100', '6000', '6100', '7000', '1000', '1010'].includes(a.code));
+      selectedAccounts = monthly.filter((a) => ['4000', '5100', '6000', '6100', '7000', '1000', '1010', '1090'].includes(a.code));
       metrics = [
         ['Pendapatan jasa', money(snapshot.profitLoss.revenue), 'Pendapatan dari layanan yang dicatat.'],
         ['Biaya langsung jasa', money(snapshot.profitLoss.cogs), 'Biaya langsung untuk memberikan layanan.'],
@@ -285,7 +288,7 @@ export async function GET(request: Request) {
         ['Beban operasional', money(snapshot.profitLoss.operatingExpenses), 'Beban operasional yang dijurnal.'],
       ];
     } else {
-      selectedAccounts = monthly.filter((a) => ['1200', '1210', '1220', '1230', '2110', '2120', '4000', '5000', '5100', '6000', '6100', '7000'].includes(a.code) || a.code.startsWith('12'));
+      selectedAccounts = monthly.filter((a) => ['1200', '1210', '1220', '1230', '2110', '2120', '4000', '5000', '5100', '6000', '6100', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
       metrics = [
         ['Pendapatan produk dan jasa', money(snapshot.profitLoss.revenue), 'Gabungan pendapatan yang tercatat pada akun pendapatan.'],
         ['HPP dan biaya langsung', money(snapshot.profitLoss.cogs), 'Gabungan biaya langsung dan HPP sesuai jurnal.'],
@@ -303,7 +306,7 @@ export async function GET(request: Request) {
     sectionCell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     sectionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E5B49' } };
     for (const account of selectedAccounts) specific.addRow([account.name, account.code, money(account.debit), money(account.credit), money(account.balance), `Jenis akun: ${account.type}`]);
-    const specificEnd = Math.max(3, (specific.lastRow?.number ?? specific.rowCount));
+    const specificEnd = Math.max(3, specific.lastRow?.number ?? specific.rowCount);
     styleDataRows(specific, 4, specificEnd, [3, 4, 5]);
     specific.views = [{ state: 'frozen', ySplit: 3, showGridLines: false }];
 
