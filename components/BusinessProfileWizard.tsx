@@ -70,27 +70,15 @@ const BENTUK = [
 const PEMBAYARAN = [
   {
     value: 'gopay_macrodroid',
-    title: 'Saya sudah punya QRIS GoPay Merchant',
-    description: 'Tetap gunakan QRIS yang sekarang. Pencatatan otomatis dilanjutkan melalui MacroDroid seperti sebelumnya.',
-    tag: 'Pertahankan integrasi lama',
-  },
-  {
-    value: 'belibayar_sandbox_static',
-    title: 'Coba QRIS statis Belibayar Sandbox',
-    description: 'Untuk demonstrasi dan pengujian webhook. QR Sandbox tidak menerima uang sungguhan.',
-    tag: 'Pengujian saja',
-  },
-  {
-    value: 'belibayar_sandbox_dynamic',
-    title: 'Coba QRIS dinamis Belibayar Sandbox',
-    description: 'Untuk menguji pembayaran berdasarkan invoice POS. QR Sandbox tidak menerima uang sungguhan.',
-    tag: 'Pengujian saja',
+    title: 'Saya sudah menggunakan GoPay Merchant',
+    description: 'Pencatatan pembayaran asli dapat diteruskan melalui notifikasi GoPay Merchant dan MacroDroid.',
+    tag: 'Integrasi pembayaran yang sudah tersedia',
   },
   {
     value: 'manual',
-    title: 'Catat pembayaran secara manual',
-    description: 'Tidak perlu menghubungkan layanan pembayaran. Transaksi dicatat melalui kasir.',
-    tag: 'Tanpa integrasi',
+    title: 'Pencatatan manual + QRIS contoh',
+    description: 'Penjualan dicatat manual. Kasir juga menyediakan pratinjau QRIS statis dan dinamis untuk dicoba; gambar QR tersebut tidak menerima pembayaran.',
+    tag: 'Tanpa gateway pembayaran',
   },
 ] as const;
 
@@ -113,7 +101,8 @@ function keForm(data: ProfilTersimpan | null, namaMetadata = ''): FormProfil {
     bentuk_usaha: data.bentuk_usaha ?? '',
     bidang_usaha: String(data.bidang_usaha ?? ''),
     memiliki_persediaan: data.memiliki_persediaan == null ? '' : data.memiliki_persediaan ? 'ya' : 'tidak',
-    metode_pembayaran: data.metode_pembayaran ?? '',
+    // Nilai Belibayar lama dinormalisasi ke manual karena gateway tersebut tidak lagi digunakan.
+    metode_pembayaran: data.metode_pembayaran === 'gopay_macrodroid' ? 'gopay_macrodroid' : data.metode_pembayaran ? 'manual' : '',
   };
 }
 
@@ -378,7 +367,7 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
                   })}
                 </div>
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900">
-                  <b>Catatan penting:</b> memilih Belibayar Sandbox hanya menyimpan preferensi pengujian. QR Sandbox tidak menerima pembayaran sungguhan dan belum membuat atau menghubungkan akun merchant. Pengguna GoPay Merchant tetap memakai integrasi MacroDroid yang sudah tersedia.
+                  <b>Catatan penting:</b> QRIS statis dan dinamis di kasir adalah gambar contoh yang tidak menerima pembayaran. Untuk pencatatan pembayaran QRIS sungguhan, akun GoPay Merchant tetap dapat menggunakan integrasi MacroDroid.
                 </div>
               </div>
             )}

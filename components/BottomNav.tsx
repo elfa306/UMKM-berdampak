@@ -6,13 +6,13 @@ import { membal } from './Motion';
 
 const items = [
   { href: '/kasir', ico: '🧾', label: 'Kasir' },
-  { href: '/riwayat', ico: '🕘', label: 'Riwayat' },
-  { href: '/statistik', ico: '📊', label: 'Statistik' },
+  { href: '/laporan', ico: '📊', label: 'Laporan' },
   { href: '/kredit', ico: '🏦', label: 'Kredit' },
+  { href: '/harga', ico: '🛒', label: 'Cek Harga' },
   { href: '/lainnya', ico: '☰', label: 'Lainnya' },
 ];
 // Halaman di bawah menu "Lainnya" tetap menyalakan tab Lainnya
-const turunanLainnya = ['/harga', '/integrasi', '/pengaturan-usaha', '/inventaris', '/produksi', '/akuntansi'];
+const turunanLainnya = ['/integrasi', '/pengaturan-usaha', '/inventaris', '/produksi', '/akuntansi'];
 
 export default function BottomNav() {
   const p = usePathname();

@@ -16,13 +16,9 @@ export default function DemoQRCode({ value, imageUrl, label = 'QRIS Sandbox' }: 
         .then((dataUrl) => { if (active) setSrc(dataUrl); })
         .catch(() => { if (active) setError('QR tidak dapat dirender.'); });
     } else if (imageUrl) {
-      try {
-        const url = new URL(imageUrl);
-        if (url.protocol === 'https:' && url.hostname === 'link.belibayar.id') setSrc(imageUrl);
-        else setError('Alamat gambar QR dari provider tidak dikenali.');
-      } catch {
-        setError('Alamat gambar QR tidak valid.');
-      }
+      // Terima hanya aset sampel lokal milik aplikasi; URL dari provider eksternal tidak digunakan.
+      if (imageUrl === '/qris-contoh.png') setSrc(imageUrl);
+      else setError('Alamat gambar QR tidak dikenali.');
     } else {
       setError('Data QRIS belum tersedia.');
     }

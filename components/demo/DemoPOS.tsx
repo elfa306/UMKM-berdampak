@@ -19,7 +19,7 @@ type Props = {
   initialSnapshot: { products: DemoPOSProduct[]; recentOrders: DemoPOSOrder[] };
 };
 type CartLine = { product: DemoPOSProduct; qty: number };
-type PendingOrder = { id: string; invoiceNo: string; total: number; paymentMethod: string; method: 'cash' | 'qris'; qrContent?: string | null; qrUrl?: string | null; qrPayloadMissing?: boolean; qrFallback?: boolean; expiresAt?: string | null; paymentStatus?: 'pending' | 'expired' | 'failed'; items: Array<{ name: string; qty: number; unit: string; unitPrice: number; subtotal: number }> };
+type PendingOrder = { id: string; invoiceNo: string; total: number; paymentMethod: string; method: 'cash' | 'qris'; qrisType?: 'static' | 'dynamic'; qrContent?: string | null; qrUrl?: string | null; qrPayloadMissing?: boolean; qrFallback?: boolean; expiresAt?: string | null; paymentStatus?: 'pending' | 'expired' | 'failed'; items: Array<{ name: string; qty: number; unit: string; unitPrice: number; subtotal: number }> };
 type NewProductForm = {
   name: string; sku: string; category: string; itemType: 'merchandise' | 'finished_good' | 'service';
   unit: string; salePrice: string; unitCost: string; stock: string; minStock: string;
@@ -42,6 +42,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
   const [recentOrders, setRecentOrders] = useState(initialSnapshot.recentOrders);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris'>('cash');
+  const [qrisType, setQrisType] = useState<'static' | 'dynamic'>('dynamic');
   const [pendingOrder, setPendingOrder] = useState<PendingOrder | null>(null);
   const [receipt, setReceipt] = useState<{ invoiceNo: string; total: number; paymentMethod: string } | null>(null);
   const [search, setSearch] = useState('');
@@ -113,7 +114,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         cache: 'no-store',
-        body: JSON.stringify({ paymentMethod, items: cartLines.map((line) => ({ productId: line.product.id, qty: line.qty })) }),
+        body: JSON.stringify({ paymentMethod, qrisType, items: cartLines.map((line) => ({ productId: line.product.id, qty: line.qty })) }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Pesanan gagal dibuat.');
@@ -123,6 +124,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
         total: Number(result.order.total),
         paymentMethod: result.order.payment_method,
         method: paymentMethod,
+        qrisType: paymentMethod === 'qris' ? qrisType : undefined,
         qrContent: result.paymentGateway?.qrContent ?? null,
         qrUrl: result.paymentGateway?.qrUrl ?? null,
         qrPayloadMissing: result.paymentGateway?.qrPayloadMissing ?? false,
@@ -136,11 +138,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
       setCart({});
       await reloadPOS();
       setNotice(paymentMethod === 'qris'
-        ? result.paymentGateway?.qrFallback
-          ? 'QRIS dinamis belum tersedia. QRIS statis sesi ditampilkan sebagai fallback demo; invoice tetap menunggu webhook pembayaran dinamis.'
-          : result.paymentGateway?.qrPayloadMissing
-            ? 'Belibayar menerima invoice, tetapi data QR belum tersedia. Invoice tetap pending; gunakan pemeriksaan status untuk memantau webhook.'
-            : 'QRIS Sandbox berhasil dibuat. Gunakan simulator untuk menguji pembayaran; stok menunggu webhook PAID.'
+        ? 'Invoice demo dibuat menggunakan QRIS contoh. QR tidak dapat dibayar; gunakan simulasi internal untuk mencoba perubahan status dan stok.'
         : 'Invoice berhasil dibuat. Stok belum berkurang sampai pembayaran dikonfirmasi.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Pesanan gagal dibuat.');
@@ -153,7 +151,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
     if (!pendingOrder) return;
     const isCancel = action === 'cancel';
     if (!isCancel && pendingOrder.method !== 'cash') {
-      setError('Pembayaran QRIS hanya dapat dinyatakan berhasil setelah webhook Belibayar terverifikasi.');
+      setError('QRIS contoh hanya dapat diselesaikan melalui simulasi internal demo.');
       return;
     }
     if (isCancel && !window.confirm(pendingOrder.paymentStatus === 'expired' || pendingOrder.paymentStatus === 'failed' ? 'Tutup panel invoice ini?' : 'Batalkan invoice yang masih menunggu pembayaran?')) return;
@@ -205,7 +203,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
       if (orderStatus === 'paid' && paymentStatus === 'paid') {
         setReceipt({ invoiceNo: pendingOrder.invoiceNo, total: pendingOrder.total, paymentMethod: pendingOrder.paymentMethod });
         setPendingOrder(null);
-        setNotice('Webhook Belibayar terverifikasi. Pembayaran tercatat dan stok telah diperbarui.');
+        setNotice('Status QRIS demo telah tersimpan. Stok dan laporan demo diperbarui.');
         await reloadPOS();
         router.refresh();
       } else if (orderStatus === 'expired' || paymentStatus === 'expired') {
@@ -217,7 +215,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
         if (showNotice) setNotice('Pembayaran tidak berhasil atau invoice dibatalkan.');
         await reloadPOS();
       } else if (showNotice) {
-        setNotice('Belum ada webhook PAID yang diterima. Pembayaran masih menunggu konfirmasi Belibayar.');
+        setNotice('Invoice QRIS demo masih menunggu simulasi internal.');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Status pembayaran gagal diperiksa.');
@@ -240,40 +238,17 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
         body: JSON.stringify({ action }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Simulasi pembayaran gagal dikirim.');
-      setNotice(action === 'success' ? 'Simulasi dikirim ke Belibayar. Menunggu webhook PAID...' : 'Simulasi kedaluwarsa dikirim. Menunggu webhook...');
-      // Webhook dikirim oleh Belibayar; browser hanya memeriksa status, tidak melunasi order.
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        const statusResponse = await fetch(`/api/demo/pos/orders/${pendingOrder.id}/status`, { credentials: 'same-origin', cache: 'no-store' });
-        const statusResult = await statusResponse.json();
-        if (!statusResponse.ok) throw new Error(statusResult.error || 'Status pembayaran gagal diperiksa.');
-        const orderStatus = statusResult.order?.status as string | undefined;
-        const paymentStatus = statusResult.payment?.status as string | undefined;
-        if (orderStatus === 'paid' && paymentStatus === 'paid') {
-          setReceipt({ invoiceNo: pendingOrder.invoiceNo, total: pendingOrder.total, paymentMethod: pendingOrder.paymentMethod });
-          setPendingOrder(null);
-          setNotice('Pembayaran Sandbox berhasil diverifikasi melalui webhook. Stok dan dashboard diperbarui.');
-          await reloadPOS();
-          router.refresh();
-          return;
-        }
-        if (orderStatus === 'expired' || paymentStatus === 'expired') {
-          setPendingOrder((current) => current ? { ...current, paymentStatus: 'expired' } : current);
-          setNotice('QRIS kedaluwarsa. Stok tidak berubah; buat invoice baru untuk mencoba lagi.');
-          await reloadPOS();
-          router.refresh();
-          return;
-        }
-        if (orderStatus === 'cancelled' || paymentStatus === 'failed') {
-          setPendingOrder((current) => current ? { ...current, paymentStatus: 'failed' } : current);
-          setNotice('Pembayaran dibatalkan. Stok tidak berubah.');
-          await reloadPOS();
-          router.refresh();
-          return;
-        }
+      if (!response.ok) throw new Error(result.error || 'Simulasi pembayaran gagal.');
+      if (action === 'success') {
+        setReceipt({ invoiceNo: pendingOrder.invoiceNo, total: pendingOrder.total, paymentMethod: pendingOrder.paymentMethod });
+        setPendingOrder(null);
+        setNotice('Simulasi QRIS internal berhasil. Ini bukan pembayaran uang sungguhan; data stok dan laporan demo telah diperbarui.');
+      } else {
+        setPendingOrder((current) => current ? { ...current, paymentStatus: 'failed' } : current);
+        setNotice('Invoice QRIS demo dibatalkan. Stok tidak berubah.');
       }
-      setNotice('Simulasi diterima. Webhook belum terlihat dalam 20 detik; gunakan tombol Periksa Status.');
+      await reloadPOS();
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Simulasi pembayaran gagal.');
     } finally {
@@ -420,11 +395,20 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
                         <span className="mt-1 block text-[10px] text-slate-500">Konfirmasi diterima</span>
                       </button>
                       <button type="button" onClick={() => setPaymentMethod('qris')} className={`rounded-xl border p-3 text-left ${paymentMethod === 'qris' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200'}`}>
-                        <span className="flex items-center gap-2 text-xs font-extrabold"><ShoppingBag size={15} /> QRIS demo</span>
-                        <span className="mt-1 block text-[10px] text-slate-500">QRIS Dinamis · Belibayar Sandbox</span>
+                        <span className="flex items-center gap-2 text-xs font-extrabold"><ShoppingBag size={15} /> QRIS contoh</span>
+                        <span className="mt-1 block text-[10px] text-slate-500">Pratinjau QRIS</span>
                       </button>
                     </div>
-                    {paymentMethod === 'qris' && <p className="mt-2 rounded-xl bg-amber-50 p-2.5 text-[10px] leading-5 text-amber-800">QRIS dinamis dibuat dari total invoice. Karena ini Sandbox, barcode tidak dapat dibayar dari aplikasi bank/e-wallet sungguhan; gunakan simulator pembayaran di bawah.</p>}
+                    {paymentMethod === 'qris' && (
+                      <div className="mt-3 space-y-2">
+                        <p className="m-0 text-[10px] font-extrabold text-slate-600">Pilih jenis pratinjau</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => setQrisType('static')} className={`rounded-xl border p-2.5 text-xs font-bold ${qrisType === 'static' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-600'}`}>QRIS Statis</button>
+                          <button type="button" onClick={() => setQrisType('dynamic')} className={`rounded-xl border p-2.5 text-xs font-bold ${qrisType === 'dynamic' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-600'}`}>QRIS Dinamis</button>
+                        </div>
+                        <p className="m-0 rounded-xl bg-amber-50 p-2.5 text-[10px] leading-5 text-amber-800">Keduanya menampilkan gambar QRIS contoh yang sama dan tidak dapat menerima pembayaran. Status paid hanya dapat dicoba melalui simulasi internal demo.</p>
+                      </div>
+                    )}
                   </div>
                   <button type="button" onClick={createOrder} disabled={!!busy || !!pendingOrder || total <= 0} className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3.5 text-sm font-extrabold text-white hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-50">
                     {busy === 'order' ? 'Membuat invoice...' : 'Buat invoice'}
@@ -462,28 +446,24 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
                       <DemoQRCode
                         value={pendingOrder.qrContent}
                         imageUrl={pendingOrder.qrUrl}
-                        label={pendingOrder.qrFallback ? 'QRIS Statis · Fallback Demo' : 'QRIS Dinamis Belibayar Sandbox'}
+                        label={pendingOrder.qrisType === 'static' ? 'QRIS Statis · Contoh Demo' : 'QRIS Dinamis · Contoh Demo'}
                       />
-                    ) : <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">{pendingOrder.qrPayloadMissing ? 'Belibayar sudah menerima transaksi, tetapi data QR belum tersedia. Invoice tetap pending agar webhook transaksi dinamis tetap bisa dicocokkan. Periksa status secara berkala.' : 'Data QRIS tidak tersedia. Periksa respons Belibayar.'}</p>}
+                    ) : <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">{pendingOrder.qrPayloadMissing ? 'Invoice demo sudah dibuat, tetapi gambar QR contoh tidak memproses pembayaran. Gunakan simulasi internal bila ingin mencoba alur.' : 'Gambar QRIS contoh tidak tersedia.'}</p>}
                     {pendingOrder.expiresAt && !pendingOrder.qrFallback && <p className="text-center text-[10px] text-slate-500">Berlaku sampai {formatDate(pendingOrder.expiresAt)}</p>}
-                    {pendingOrder.qrFallback ? (
-                      <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] leading-5 text-amber-900">Ini adalah QRIS statis milik sesi demo, bukan QR dinamis untuk invoice di atas. QR ini hanya menjadi fallback tampilan; pembayaran melalui QR tersebut tidak otomatis melunasi invoice ini. Invoice tetap menunggu webhook untuk transaksi dinamis.</p>
-                    ) : (
-                      <p className="rounded-xl bg-amber-50 p-3 text-[10px] leading-5 text-amber-900">QRIS Sandbox hanya untuk pengujian. Stok belum berubah sampai webhook PAID untuk invoice ini terverifikasi.</p>
-                    )}
+                    <p className="rounded-xl bg-amber-50 p-3 text-[10px] leading-5 text-amber-900">QRIS yang terlihat hanya gambar contoh. Pada pilihan dinamis, nominal invoice hanya ditampilkan di layar dan tidak tertanam di QR. Scan tidak menerima uang dan tidak otomatis melunasi invoice.</p>
                   </div>
                 )}
-                <p className="mt-3 text-[11px] leading-5 text-amber-900">{pendingOrder.method === 'cash' ? 'Konfirmasi hanya setelah uang tunai benar-benar diterima.' : pendingOrder.paymentStatus === 'expired' ? 'QRIS kedaluwarsa. Buat invoice baru untuk mengulang transaksi.' : pendingOrder.paymentStatus === 'failed' ? 'Pembayaran gagal atau dibatalkan.' : 'Stok belum dikurangi. Sistem menunggu webhook pembayaran dari Belibayar.'}</p>
+                <p className="mt-3 text-[11px] leading-5 text-amber-900">{pendingOrder.method === 'cash' ? 'Konfirmasi hanya setelah uang tunai benar-benar diterima.' : pendingOrder.paymentStatus === 'expired' ? 'QRIS kedaluwarsa. Buat invoice baru untuk mengulang transaksi.' : pendingOrder.paymentStatus === 'failed' ? 'Pembayaran gagal atau dibatalkan.' : 'Stok belum dikurangi. Sistem menunggu simulasi internal demo.'}</p>
                 {pendingOrder.method === 'cash' ? (
                   <button type="button" onClick={() => settleOrder('paid')} disabled={!!busy} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-xs font-extrabold text-white hover:bg-emerald-800 disabled:opacity-50">{busy === 'settle' ? 'Memproses...' : 'Konfirmasi tunai diterima'}</button>
                 ) : pendingOrder.qrPayloadMissing ? (
                   <div className="mt-3 space-y-2">
-                    <p className="text-[10px] leading-5 text-slate-500">{pendingOrder.qrFallback ? 'Simulator QRIS dinamis dinonaktifkan karena QR yang tampil adalah QR statis fallback dan tidak terhubung dengan reference invoice.' : 'Simulator dinamis tidak ditampilkan karena Belibayar belum memberikan payload QR untuk invoice ini.'}</p>
+                    <p className="text-[10px] leading-5 text-slate-500">{pendingOrder.qrFallback ? 'QR statis contoh hanya untuk tampilan dan tidak terhubung ke reference invoice.' : 'QRIS contoh hanya untuk tampilan; gunakan simulator internal untuk mencoba alur demo.'}</p>
                     <button type="button" onClick={() => checkQrisStatus()} disabled={!!busy} className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{busy === 'status' ? 'Memeriksa...' : 'Periksa status invoice'}</button>
                   </div>
                 ) : (
                   <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    <button type="button" onClick={() => simulateQris('success')} disabled={!!busy || pendingOrder.paymentStatus !== 'pending'} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-3 text-xs font-extrabold text-white hover:bg-emerald-800 disabled:opacity-50">{busy === 'simulate' ? 'Mengirim simulasi...' : 'Simulasikan berhasil'}</button>
+                    <button type="button" onClick={() => simulateQris('success')} disabled={!!busy || pendingOrder.paymentStatus !== 'pending'} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-3 text-xs font-extrabold text-white hover:bg-emerald-800 disabled:opacity-50">{busy === 'simulate' ? 'Memproses simulasi...' : 'Simulasikan berhasil'}</button>
                     <button type="button" onClick={() => simulateQris('expire')} disabled={!!busy || pendingOrder.paymentStatus !== 'pending'} className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-white px-3 py-3 text-xs font-bold text-amber-900 hover:bg-amber-100 disabled:opacity-50">Simulasikan kedaluwarsa</button>
                     <button type="button" onClick={() => checkQrisStatus()} disabled={!!busy} className="sm:col-span-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{busy === 'status' ? 'Memeriksa...' : 'Periksa status pembayaran'}</button>
                   </div>

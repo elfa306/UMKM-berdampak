@@ -127,11 +127,9 @@ export default function Integrasi() {
         <p className="muted" style={{ margin: '4px 0' }}>
           {metodeDipilih === 'gopay_macrodroid'
             ? 'Profil usaha memilih GoPay Merchant + MacroDroid. QRIS yang sudah Anda gunakan tetap dipertahankan.'
-            : metodeDipilih === 'belibayar_sandbox_static'
-              ? 'Profil usaha memilih Belibayar Sandbox QRIS statis. Integrasi ini terpisah dari GoPay Merchant.'
-              : metodeDipilih === 'belibayar_sandbox_dynamic'
-                ? 'Profil usaha memilih Belibayar Sandbox QRIS dinamis. Integrasi ini terpisah dari GoPay Merchant.'
-                : 'Halaman ini khusus untuk menghubungkan GoPay Merchant melalui MacroDroid. Pengaturan metode dapat diubah di Profil & Jenis Usaha.'}
+            : metodeDipilih === 'belibayar_sandbox_static' || metodeDipilih === 'belibayar_sandbox_dynamic'
+              ? 'Profil lama pernah memilih Belibayar Sandbox. Integrasi Belibayar sudah tidak digunakan; QRIS contoh statis dan dinamis tersedia sebagai pratinjau di halaman Kasir.'
+              : 'Halaman ini khusus untuk menghubungkan GoPay Merchant melalui MacroDroid. QRIS contoh statis dan dinamis tersedia di halaman Kasir, tanpa gateway pembayaran.'}
         </p>
       </div>
 
@@ -282,7 +280,7 @@ export default function Integrasi() {
           <li>Minta teman atau gunakan HP lain untuk membayar <b>Rp1.000</b> ke QRIS GoPay Merchant Anda.</li>
           <li>Tunggu notifikasi pembayaran muncul di HP Anda.</li>
           <li>Dalam sekitar 20 detik, pembayaran itu muncul di <b>Transaksi terakhir</b> di halaman Kasir dan kotak “Status sambungan” di atas halaman ini berubah menjadi hijau.</li>
-          <li>Hapus transaksi tes dengan menekan <b>Batalkan transaksi terakhir</b> di halaman Kasir, atau lewat halaman <b>Riwayat</b>.</li>
+          <li>Hapus transaksi tes dengan menekan <b>Batalkan transaksi terakhir</b> di halaman Kasir, atau lewat halaman <b>Laporan → Riwayat Transaksi</b>.</li>
         </Langkah>
         <Tip warna="#dcfce7">Selesai. Mulai sekarang setiap pembayaran QRIS masuk akan tercatat otomatis. Pembayaran yang sama tidak akan tercatat dobel.</Tip>
       </Bagian>

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { ArrowLeft, BookOpen, Calculator, CheckCircle2, ClipboardList, FileText, Plus, RefreshCw, Scale, Wallet } from 'lucide-react';
+import { ArrowLeft, BookOpen, Calculator, CheckCircle2, ClipboardList, Download, FileText, Plus, RefreshCw, Scale, Wallet } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 type Mode = 'demo' | 'production';
@@ -36,6 +36,7 @@ export default function AccountingDashboard({ mode, businessName }: { mode: Mode
   const [tab, setTab] = useState<'profit' | 'balance' | 'cash' | 'notes' | 'journals'>('profit');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [showEntry, setShowEntry] = useState(false);
@@ -56,6 +57,36 @@ export default function AccountingDashboard({ mode, businessName }: { mode: Mode
   }, [endpoint, headers, month]);
 
   useEffect(() => { let active = true; setLoading(true); setError(''); reload().catch((e) => { if (active) setError(e instanceof Error ? e.message : 'Laporan gagal dimuat.'); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [reload]);
+
+  async function downloadMonthlyExcel() {
+    if (isDemo) return;
+    setExporting(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await fetch(`/api/akuntansi/export?month=${encodeURIComponent(month)}`, {
+        headers: await headers(), credentials: 'same-origin', cache: 'no-store',
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(result?.error || 'Unduhan laporan Excel gagal.');
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `Laporan-Akuntansi-${month}.xlsx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setNotice(`Laporan akuntansi ${month} berhasil diunduh dalam format Excel.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Unduhan laporan Excel gagal.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function saveEntry(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(''); setNotice('');
@@ -85,7 +116,13 @@ export default function AccountingDashboard({ mode, businessName }: { mode: Mode
         {error && <div role="alert" className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
         {notice && <div role="status" className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</div>}
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3"><label className="text-xs font-bold text-slate-600">Periode laporan<input aria-label="Periode laporan" type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="ml-2 rounded-xl border border-slate-200 bg-white p-2.5 text-sm font-semibold"/></label><button onClick={() => reload().catch((e) => setError(e.message))} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-extrabold text-slate-600"><RefreshCw size={14}/> Muat ulang</button></div>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          <label className="text-xs font-bold text-slate-600">Periode laporan<input aria-label="Periode laporan" type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="ml-2 rounded-xl border border-slate-200 bg-white p-2.5 text-sm font-semibold"/></label>
+          <div className="flex flex-wrap gap-2">
+            {!isDemo && <button onClick={downloadMonthlyExcel} disabled={exporting} className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2.5 text-xs font-extrabold text-white disabled:opacity-50"><Download size={14}/> {exporting ? 'Menyiapkan Excel…' : 'Unduh laporan bulanan Excel'}</button>}
+            <button onClick={() => reload().catch((e) => setError(e.message))} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-extrabold text-slate-600"><RefreshCw size={14}/> Muat ulang</button>
+          </div>
+        </div>
         <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm sm:grid-cols-5">{([{ id: 'profit', label: 'Laba Rugi', icon: FileText }, { id: 'balance', label: 'Posisi Keuangan', icon: Scale }, { id: 'cash', label: 'Arus Kas', icon: Wallet }, { id: 'notes', label: 'Catatan', icon: ClipboardList }, { id: 'journals', label: 'Jurnal', icon: BookOpen }] as const).map((t) => { const Icon = t.icon; return <button key={t.id} onClick={() => setTab(t.id)} className={`flex items-center justify-center gap-2 rounded-xl px-2 py-3 text-xs font-extrabold sm:text-sm ${tab === t.id ? 'bg-blue-900 text-white' : 'text-slate-600 hover:bg-slate-50'}`}><Icon size={15}/><span>{t.label}</span></button>; })}</div>
 
         {loading ? <div className="mt-6 rounded-2xl bg-white p-8 text-center text-sm text-slate-500">Menghitung laporan keuangan…</div> : null}

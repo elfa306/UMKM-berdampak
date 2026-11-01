@@ -9,8 +9,7 @@ const menu = [
   { href: '/pengaturan-usaha', ico: '🏪', judul: 'Profil & Jenis Usaha', ket: 'Ubah karakteristik bisnis dan metode pembayaran' },
   { href: '/inventaris', ico: '📦', judul: 'Manajemen Inventaris', ket: 'Kelola produk, pemasok, pembelian, dan pergerakan stok' },
   { href: '/produksi', ico: '🏭', judul: 'Produksi & HPP', ket: 'Kelola resep, batch produksi, bahan baku, dan biaya produksi' },
-  { href: '/akuntansi', ico: '📒', judul: 'Akuntansi & Laporan', ket: 'Lihat laba rugi, posisi keuangan, arus kas, dan jurnal' },
-  { href: '/harga', ico: '🛒', judul: 'Cek Harga Bahan', ket: 'Bandingkan harga bahan baku di toko online' },
+  { href: '/akuntansi', ico: '📒', judul: 'Pembukuan & Akuntansi', ket: 'Lihat laba rugi, posisi keuangan, arus kas, dan jurnal' },
   { href: '/integrasi', ico: '🔗', judul: 'Hubungkan QRIS', ket: 'Pasang MacroDroid supaya QRIS tercatat otomatis' },
   { href: '/reset-password', ico: '🔑', judul: 'Ganti Kata Sandi', ket: 'Ubah kata sandi akun Anda' },
 ];

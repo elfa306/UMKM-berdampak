@@ -37,7 +37,7 @@ export async function POST(request: Request, context: Context) {
         .maybeSingle();
       if (paymentError) throw paymentError;
       if (!payment || payment.provider !== 'cash_simulation') {
-        return NextResponse.json({ error: 'Pembayaran QRIS tidak dapat dilunasi dari browser. Status PAID hanya diterima melalui webhook Belibayar yang valid.' }, { status: 409 });
+        return NextResponse.json({ error: 'QRIS contoh tidak bisa melunasi pesanan. Gunakan simulator internal mode demo; pembayaran QRIS nyata belum terhubung pada fitur ini.' }, { status: 409 });
       }
     }
 

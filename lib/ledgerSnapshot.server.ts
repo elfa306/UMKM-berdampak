@@ -27,7 +27,9 @@ function calculate(entries: LedgerEntry[], lines: LedgerLine[], month?: string) 
     }
     return [...accounts.values()].map((a) => ({ ...a, balance: a.type === 'asset' || a.type === 'expense' || a.type === 'contra_equity' ? a.debit - a.credit : a.credit - a.debit }));
   };
-  const allAccounts = aggregate(lines);
+  const closingEntryIds = new Set(entries.filter((entry) => entry.entry_date < range.endExclusive).map((entry) => entry.id));
+  const closingLines = lines.filter((line) => closingEntryIds.has(line.entry_id));
+  const allAccounts = aggregate(closingLines);
   const monthAccounts = aggregate(currentLines);
   const sumBy = (accounts: ReturnType<typeof aggregate>, predicate: (a: ReturnType<typeof aggregate>[number]) => boolean) => accounts.filter(predicate).reduce((sum, a) => sum + a.balance, 0);
   const revenue = sumBy(monthAccounts, (a) => a.type === 'revenue');
@@ -52,7 +54,7 @@ function calculate(entries: LedgerEntry[], lines: LedgerLine[], month?: string) 
   const cashIn = periodCashLines.reduce((sum, line) => sum + num(line.debit), 0);
   const cashOut = periodCashLines.reduce((sum, line) => sum + num(line.credit), 0);
   const cashFlow = { openingCash, cashIn, cashOut, netChange: cashIn - cashOut, closingCash: openingCash + cashIn - cashOut };
-  const recent = entries.slice(0, 15).map((entry) => {
+  const recent = entries.filter((entry) => entry.entry_date < range.endExclusive).slice(0, 15).map((entry) => {
     const entryLines = lines.filter((line) => line.entry_id === entry.id);
     return { ...entry, totalDebit: entryLines.reduce((s, l) => s + num(l.debit), 0), totalCredit: entryLines.reduce((s, l) => s + num(l.credit), 0) };
   });
@@ -75,20 +77,35 @@ function calculate(entries: LedgerEntry[], lines: LedgerLine[], month?: string) 
 }
 
 async function loadSnapshot(admin: SupabaseClient, entryTable: string, lineTable: string, scopeColumn: string, scopeId: string, month?: string) {
-  const { data: entriesRaw, error: entriesError } = await admin.from(entryTable)
-    .select('id,entry_no,source_type,entry_date,description,created_at')
-    .eq(scopeColumn, scopeId).order('entry_date', { ascending: false }).order('created_at', { ascending: false }).limit(5000);
-  if (entriesError) throw new Error(`Gagal membaca jurnal: ${entriesError.message}`);
-  const entries = (entriesRaw ?? []) as LedgerEntry[];
+  const selectedRange = monthRange(month);
+  const entries: LedgerEntry[] = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await admin.from(entryTable)
+      .select('id,entry_no,source_type,entry_date,description,created_at')
+      .eq(scopeColumn, scopeId)
+      .lt('entry_date', selectedRange.endExclusive)
+      .order('entry_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`Gagal membaca jurnal: ${error.message}`);
+    entries.push(...((data ?? []) as LedgerEntry[]));
+    if (!data || data.length < pageSize) break;
+  }
   const ids = entries.map((e) => e.id);
   const lines: LedgerLine[] = [];
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200);
-    const { data, error } = await admin.from(lineTable)
-      .select('entry_id,account_code,account_name,account_type,debit,credit')
-      .eq(scopeColumn, scopeId).in('entry_id', chunk);
-    if (error) throw new Error(`Gagal membaca rincian jurnal: ${error.message}`);
-    lines.push(...((data ?? []) as LedgerLine[]));
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await admin.from(lineTable)
+        .select('entry_id,account_code,account_name,account_type,debit,credit')
+        .eq(scopeColumn, scopeId).in('entry_id', chunk)
+        .range(from, from + pageSize - 1);
+      if (error) throw new Error(`Gagal membaca rincian jurnal: ${error.message}`);
+      lines.push(...((data ?? []) as LedgerLine[]));
+      if (!data || data.length < pageSize) break;
+    }
   }
   return calculate(entries, lines, month);
 }
