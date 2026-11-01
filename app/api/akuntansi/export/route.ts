@@ -159,7 +159,7 @@ export async function GET(request: Request) {
     summary.addRow(['Bidang usaha', String(profile?.bidang_usaha || 'Belum diisi'), 'Bentuk usaha', legalForm]);
     summary.addRow(['Memiliki persediaan', profile?.memiliki_persediaan === true ? 'Ya' : profile?.memiliki_persediaan === false ? 'Tidak' : 'Belum diisi', 'Jumlah jurnal bulan ini', entries.length]);
     summary.addRow(['Metode pembayaran terdaftar', paymentMethodLabel, 'Pembayaran QRIS contoh', 'Tidak dihitung sebagai transaksi']);
-    r = summary.lastRow.number + 2;
+    r = (summary.lastRow?.number ?? summary.rowCount) + 2;
     r = addSection(summary, r, 'LAPORAN LABA RUGI', 2);
     const revenueLabel = kind === 'jasa' ? 'Pendapatan jasa' : kind === 'campuran' ? 'Pendapatan produk dan jasa' : 'Pendapatan penjualan';
     const cogsLabel = kind === 'jasa' ? 'Biaya langsung jasa' : kind === 'manufaktur' ? 'Harga pokok produk terjual' : kind === 'campuran' ? 'HPP dan biaya langsung' : 'Harga pokok penjualan';
@@ -169,21 +169,21 @@ export async function GET(request: Request) {
       ['Beban lainnya', money(snapshot.profitLoss.otherExpenses)], ['LABA / (RUGI) BERSIH', money(snapshot.profitLoss.netProfit)],
     ];
     for (const row of profitRows) summary.addRow(row);
-    r = summary.lastRow.number + 2;
+    r = (summary.lastRow?.number ?? summary.rowCount) + 2;
     r = addSection(summary, r, 'POSISI KEUANGAN PADA AKHIR BULAN', 2);
     const bs = snapshot.balanceSheet;
     for (const row of [['Total aset', money(bs.assets)], ['Total liabilitas', money(bs.liabilities)], ['Modal dan saldo laba', money(bs.equity)], ['Kas dan bank', money(bs.cash)], ['Selisih aset - liabilitas - ekuitas', money(bs.difference)]]) summary.addRow(row);
-    r = summary.lastRow.number + 2;
+    r = (summary.lastRow?.number ?? summary.rowCount) + 2;
     r = addSection(summary, r, 'RINCIAN PENERIMAAN PENJUALAN', 2);
     summary.addRow(['Penerimaan penjualan tunai', cashReceipts]);
     summary.addRow(['Penerimaan penjualan Bank / QRIS', qrisReceipts]);
     summary.addRow(['Total penerimaan penjualan teridentifikasi', cashReceipts + qrisReceipts]);
     summary.addRow(['Catatan QRIS', 'QRIS contoh statis/dinamis hanya pratinjau; tidak masuk jurnal atau penerimaan.']);
-    r = summary.lastRow.number + 2;
+    r = (summary.lastRow?.number ?? summary.rowCount) + 2;
     r = addSection(summary, r, 'ARUS KAS BULANAN', 2);
     const cf = snapshot.cashFlow;
     for (const row of [['Saldo kas awal bulan', money(cf.openingCash)], ['Kas masuk', money(cf.cashIn)], ['Kas keluar', money(cf.cashOut)], ['Kenaikan / (penurunan) kas', money(cf.netChange)], ['Saldo kas akhir bulan', money(cf.closingCash)]]) summary.addRow(row);
-    r = summary.lastRow.number + 2;
+    r = (summary.lastRow?.number ?? summary.rowCount) + 2;
     r = addSection(summary, r, 'KONTROL JURNAL', 2);
     summary.addRow(['Total debit bulan ini', money(snapshot.monthDebit)]);
     summary.addRow(['Total kredit bulan ini', money(snapshot.monthCredit)]);
