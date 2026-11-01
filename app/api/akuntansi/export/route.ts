@@ -189,7 +189,7 @@ export async function GET(request: Request) {
     summary.addRow(['Total kredit bulan ini', money(snapshot.monthCredit)]);
     summary.addRow(['Status keseimbangan', snapshot.balanced ? 'Seimbang' : 'Perlu pemeriksaan']);
     summary.addRow(['Catatan', String(snapshot.note || '')]);
-    styleDataRows(summary, 5, summary.lastRow.number, [2]);
+    styleDataRows(summary, 5, (summary.lastRow?.number ?? summary.rowCount), [2]);
     summary.views = [{ state: 'frozen', ySplit: 4, showGridLines: false }];
 
     // 2. Neraca saldo pergerakan bulan berjalan.
@@ -200,7 +200,7 @@ export async function GET(request: Request) {
     styleTableHeader(trial.getRow(3));
     const trialRows = (snapshot.monthlyTrialBalance as TrialRow[]).map((a) => [a.code, a.name, a.type, money(a.debit), money(a.credit), money(a.balance)]);
     trialRows.forEach((row) => trial.addRow(row));
-    const trialEnd = Math.max(3, trial.lastRow.number);
+    const trialEnd = Math.max(3, (trial.lastRow?.number ?? trial.rowCount));
     styleDataRows(trial, 4, trialEnd, [4, 5, 6]);
     trial.views = [{ state: 'frozen', ySplit: 3, showGridLines: false }];
     trial.autoFilter = { from: { row: 3, column: 1 }, to: { row: trialEnd, column: 6 } };
@@ -216,7 +216,7 @@ export async function GET(request: Request) {
       return entry ? [entry.entry_date, entry.entry_no, SOURCE_LABEL[entry.source_type] || entry.source_type, entry.description, line.account_code, line.account_name, line.account_type, money(line.debit), money(line.credit)] : null;
     }).filter((row): row is (string | number)[] => row !== null);
     journalRows.forEach((row) => journal.addRow(row));
-    const journalEnd = Math.max(3, journal.lastRow.number);
+    const journalEnd = Math.max(3, (journal.lastRow?.number ?? journal.rowCount));
     styleDataRows(journal, 4, journalEnd, [8, 9]);
     journal.views = [{ state: 'frozen', ySplit: 3, showGridLines: false }];
     journal.autoFilter = { from: { row: 3, column: 1 }, to: { row: journalEnd, column: 9 } };
@@ -232,7 +232,7 @@ export async function GET(request: Request) {
     payments.addRow(['Penerimaan Bank / QRIS', qrisReceipts]);
     payments.addRow(['Total penerimaan teridentifikasi', cashReceipts + qrisReceipts]);
     payments.addRow(['QRIS statis/dinamis contoh', 'Pratinjau saja — tidak menerima pembayaran dan tidak masuk jurnal']);
-    paymentRow = payments.lastRow.number + 2;
+    paymentRow = (payments.lastRow?.number ?? payments.rowCount) + 2;
     payments.mergeCells(paymentRow, 1, paymentRow, 5);
     payments.getCell(paymentRow, 1).value = 'DETAIL PENERIMAAN PENJUALAN';
     payments.getCell(paymentRow, 1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -244,7 +244,7 @@ export async function GET(request: Request) {
       if (!entry) continue;
       payments.addRow([entry.entry_date, entry.entry_no, entry.description, line.account_code === '1010' ? 'Bank / QRIS' : 'Tunai', money(line.debit)]);
     }
-    const paymentEnd = Math.max(paymentRow + 1, payments.lastRow.number);
+    const paymentEnd = Math.max(paymentRow + 1, (payments.lastRow?.number ?? payments.rowCount));
     styleDataRows(payments, 4, paymentEnd, [2, 5]);
     payments.views = [{ state: 'frozen', ySplit: paymentRow + 1, showGridLines: false }];
     payments.autoFilter = { from: { row: paymentRow + 1, column: 1 }, to: { row: paymentEnd, column: 5 } };
@@ -296,14 +296,14 @@ export async function GET(request: Request) {
     for (const [label, amount, note] of metrics) {
       specific.addRow([label, '', amount, '', amount, note]);
     }
-    const sectionRow = specific.lastRow.number + 2;
+    const sectionRow = (specific.lastRow?.number ?? specific.rowCount) + 2;
     specific.mergeCells(sectionRow, 1, sectionRow, 6);
     const sectionCell = specific.getCell(sectionRow, 1);
     sectionCell.value = 'RINCIAN AKUN TERKAIT';
     sectionCell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     sectionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E5B49' } };
     for (const account of selectedAccounts) specific.addRow([account.name, account.code, money(account.debit), money(account.credit), money(account.balance), `Jenis akun: ${account.type}`]);
-    const specificEnd = Math.max(3, specific.lastRow.number);
+    const specificEnd = Math.max(3, (specific.lastRow?.number ?? specific.rowCount));
     styleDataRows(specific, 4, specificEnd, [3, 4, 5]);
     specific.views = [{ state: 'frozen', ySplit: 3, showGridLines: false }];
 
