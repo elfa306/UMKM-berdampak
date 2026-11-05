@@ -55,7 +55,7 @@ export default function Kasir() {
   const router = useRouter();
   const tanggal = todayISO();
   const [userId, setUserId] = useState<string | null>(null);
-  const [namaUsaha, setNamaUsaha] = useState('[Nama Usaha]');
+  const [namaUsaha, setNamaUsaha] = useState('Usaha saya');
   const [sesi, setSesi] = useState<Sesi | null>(null);
   const [txs, setTxs] = useState<Tx[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -94,7 +94,7 @@ export default function Kasir() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       setUserId('guest');
-      setNamaUsaha('[Nama Usaha]');
+      setNamaUsaha('Mode Tamu');
       setProducts([
         { id: 'sample-1', nama: 'Kopi Cava Latte', harga: 18000, stok: 15, satuan: 'cup', aktif: true, jenis_item: 'finished_good' } as any,
         { id: 'sample-2', nama: 'Roti Bakar Kaya', harga: 15000, stok: 20, satuan: 'porsi', aktif: true, jenis_item: 'finished_good' } as any,
@@ -104,10 +104,19 @@ export default function Kasir() {
       return;
     }
 
-    const [p, s] = await Promise.all([
+    const [p, s, profil] = await Promise.all([
       supabase.from('products').select('id,nama,harga,stok,stok_minimum,satuan').eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
       supabase.from('daily_sessions').select('id,modal_harian').eq('tanggal', tanggal).maybeSingle(),
+      supabase.from('business_profiles').select('nama_usaha').eq('user_id', user.id).maybeSingle(),
     ]);
+
+    // Nama usaha bersumber dari profil akun yang sedang login.
+    // Metadata Auth menjadi cadangan bila profil usaha belum tersedia.
+    const namaProfil = typeof profil.data?.nama_usaha === 'string' ? profil.data.nama_usaha.trim() : '';
+    const namaMetadata = typeof user.user_metadata?.nama_usaha === 'string' ? user.user_metadata.nama_usaha.trim() : '';
+    const namaAkun = typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name.trim() : '';
+    setNamaUsaha(namaProfil || namaMetadata || namaAkun || 'Usaha saya');
+
     setProducts((p.data ?? []).map((x) => ({ ...x, harga: Number(x.harga) })));
     if (s.data) {
       setSesi({ id: s.data.id, modal_harian: Number(s.data.modal_harian) });

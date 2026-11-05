@@ -7,7 +7,7 @@ import { motion } from 'framer-motion';
 import { 
   Home, 
   History, 
-  ShieldCheck, 
+  Landmark,
   User, 
   Boxes, 
   TrendingUp, 
@@ -39,16 +39,37 @@ export default function BottomNav() {
   const [namaUsaha, setNamaUsaha] = useState('[Nama Usaha]');
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user?.user_metadata?.nama_usaha) {
-        setNamaUsaha(user.user_metadata.nama_usaha);
+    let aktif = true;
+
+    async function muatNamaUsaha() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!aktif) return;
+
+      if (!user) {
+        setNamaUsaha('Mode Tamu');
+        return;
       }
-    });
+
+      const { data: profil } = await supabase
+        .from('business_profiles')
+        .select('nama_usaha')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (!aktif) return;
+      const namaProfil = typeof profil?.nama_usaha === 'string' ? profil.nama_usaha.trim() : '';
+      const namaMetadata = typeof user.user_metadata?.nama_usaha === 'string' ? user.user_metadata.nama_usaha.trim() : '';
+      const namaAkun = typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name.trim() : '';
+      setNamaUsaha(namaProfil || namaMetadata || namaAkun || 'Usaha saya');
+    }
+
+    void muatNamaUsaha();
+    return () => { aktif = false; };
   }, []);
 
   const isBeranda = p === '/kasir' || p === '/';
   const isRiwayat = p === '/laporan';
-  const isNilai = p === '/kredit' || p === '/rekomendasi';
+  const isPembiayaan = p === '/pembiayaan';
   const isInventaris = p === '/inventaris';
   const isHarga = p === '/harga';
   const isAkun = p === '/lainnya' || p === '/pengaturan-usaha' || p === '/integrasi';
@@ -57,7 +78,7 @@ export default function BottomNav() {
   const navLinks = [
     { href: '/kasir', label: 'Beranda', icon: Home, active: isBeranda },
     { href: '/laporan', label: 'Riwayat & Laporan', icon: History, active: isRiwayat },
-    { href: '/kredit', label: 'Nilai Usaha (KUR)', icon: ShieldCheck, active: isNilai },
+    { href: '/pembiayaan', label: 'Rekomendasi Pembiayaan', icon: Landmark, active: isPembiayaan },
     { href: '/inventaris', label: 'Inventaris & Stok', icon: Boxes, active: isInventaris },
     { href: '/harga', label: 'Cek Harga Bahan', icon: TrendingUp, active: isHarga },
     { href: '/lainnya', label: 'Pengaturan & Akun', icon: Settings, active: isAkun },
@@ -97,7 +118,7 @@ export default function BottomNav() {
         </div>
 
         {[
-          { href: '/kredit', label: 'Nilai', Icon: ShieldCheck, on: isNilai },
+          { href: '/pembiayaan', label: 'Pembiayaan', Icon: Landmark, on: isPembiayaan },
           { href: '/lainnya', label: 'Akun', Icon: User, on: isAkun },
         ].map(({ href, label, Icon, on }) => (
           <Link key={href} href={href} aria-current={on ? 'page' : undefined} className="flex flex-col items-center gap-0.5 py-1">
