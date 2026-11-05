@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { ArrowLeft, Boxes, Factory, Plus, RefreshCw, Scissors, ShieldCheck, Timer, Trash2, Wallet } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import BottomNav from '@/components/BottomNav';
 
 type Mode = 'demo' | 'production';
 type Product = { id: string; sku?: string | null; name: string; itemType: string; unit: string; salePrice: number; unitCost: number; stock: number; tracksStock: boolean };
@@ -30,13 +31,17 @@ export default function ManufacturingManager({ mode, businessName }: { mode: Mod
   const [runForm, setRunForm] = useState({ recipeId: '', batchCount: '1', laborCost: '30000', overheadCost: '20000', note: '' });
 
   const reload = useCallback(async () => {
-    const headers: HeadersInit = {};
+    let headers: HeadersInit = {};
+    let ep = endpoint;
     if (!isDemo) {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error('Sesi login tidak ditemukan. Silakan masuk kembali.');
-      headers.Authorization = `Bearer ${session.access_token}`;
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      } else {
+        ep = '/api/demo/produksi';
+      }
     }
-    const response = await fetch(endpoint, { headers, credentials: 'same-origin', cache: 'no-store' });
+    const response = await fetch(ep, { headers, credentials: 'same-origin', cache: 'no-store' });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Data produksi gagal dimuat.');
     setSnapshot(result as Snapshot);
@@ -51,12 +56,16 @@ export default function ManufacturingManager({ mode, businessName }: { mode: Mod
 
   async function post(payload: Record<string, unknown>) {
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    let ep = endpoint;
     if (!isDemo) {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error('Sesi login berakhir. Silakan masuk kembali.');
-      headers.Authorization = `Bearer ${session.access_token}`;
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      } else {
+        ep = '/api/demo/produksi';
+      }
     }
-    const response = await fetch(endpoint, { method: 'POST', headers, credentials: 'same-origin', cache: 'no-store', body: JSON.stringify(payload) });
+    const response = await fetch(ep, { method: 'POST', headers, credentials: 'same-origin', cache: 'no-store', body: JSON.stringify(payload) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Permintaan produksi gagal.');
     return result;
@@ -150,6 +159,7 @@ export default function ManufacturingManager({ mode, businessName }: { mode: Mod
 
         <div className="mt-5 flex flex-wrap gap-2"><Link href={isDemo ? '/demo/inventaris' : '/inventaris'} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-extrabold text-slate-700"><Boxes size={15}/> Kelola bahan & stok</Link><Link href={isDemo ? '/demo/akuntansi' : '/akuntansi'} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-extrabold text-slate-700"><Wallet size={15}/> Lihat akuntansi</Link><button onClick={() => reload().catch((e) => setError(e.message))} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-extrabold text-slate-700"><RefreshCw size={15}/> Muat ulang</button></div>
         <p className="mt-5 text-[11px] leading-5 text-slate-500">Catatan: perhitungan menggunakan harga pokok rata-rata bergerak dari inventaris. HPP adalah estimasi berdasarkan biaya yang dicatat; alokasi biaya penyusutan, produk gagal, kapasitas normal, dan WIP yang kompleks memerlukan pencatatan tambahan.</p>
+        <BottomNav />
       </div>
     </main>
   );

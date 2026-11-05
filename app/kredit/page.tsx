@@ -1,561 +1,408 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
-import { AnimatePresence, animate, motion, useReducedMotion } from 'framer-motion';
-import { ChevronDown, Sparkles, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
+import { motion } from 'framer-motion';
+import {
+  ArrowRight,
+  CalendarDays,
+  CheckCircle2,
+  Circle,
+  Download,
+  Info,
+  TrendingUp,
+  Wallet,
+} from 'lucide-react';
 import BottomNav from '@/components/BottomNav';
+import { CavaLogo } from '@/components/CavaLogo';
 import { supabase } from '@/lib/supabase';
 import { fetchHari } from '@/lib/data';
-import { todayISO } from '@/lib/accounting';
-import { BI_RATE } from '@/lib/config';
-import { buatProfilRekomendasi, type ProfilRekomendasi } from '@/lib/rekomendasiProfile';
+import { todayISO, rupiah } from '@/lib/accounting';
+import { exportPdf } from '@/lib/exportPdf';
+import { Rise } from '@/components/Motion';
 
-/* =====================================================================
- * 1. DATA SIMULASI LEMBAGA & LOGIKA (otaknya)
- * ===================================================================== */
-
-// Basis suku bunga (makro), mengikuti konfigurasi aplikasi.
-const currentBiRate = BI_RATE;
-
-// Bunga <= batas ini diwarnai hijau (murah), di atasnya merah (mahal).
-const BATAS_BUNGA_MURAH = 8;
-// Cicilan dianggap aman bila tidak lebih dari 30% untung bulanan.
-const BATAS_RASIO_CICILAN = 0.3;
-
-type Risiko = 'rendah' | 'sedang' | 'tinggi';
-
-type Bank = {
-  id: string;
-  nama: string;
-  jenis: string;
-  plafonMin: number;
-  plafonMax: number;
-  tenorBulan: number;
-  hitungBunga: (biRate: number) => number; // % per tahun
-  basisBunga: string; // teks singkat cara hitung bunga
-  minUsiaBulan: number;
-  minOmzetHarian: number;
-  prosesHari: number;
-  agunan: boolean;
-  risiko: Risiko;
+type NilaiData = {
+  loggedIn: boolean;
+  hariTercatat: number;
+  mingguBerpemasukan: number;
+  profilLengkap: boolean;
+  laporanTersedia: boolean;
 };
 
-type Profil = ProfilRekomendasi;
+const DATA_KOSONG: NilaiData = {
+  loggedIn: false,
+  hariTercatat: 0,
+  mingguBerpemasukan: 0,
+  profilLengkap: false,
+  laporanTersedia: false,
+};
 
-const mockBanks: Bank[] = [
-  {
-    id: 'kur-bri', nama: 'KUR BRI', jenis: 'Bank · Subsidi pemerintah',
-    plafonMin: 1_000_000, plafonMax: 100_000_000, tenorBulan: 36,
-    hitungBunga: () => 6, basisBunga: 'Tetap 6%',
-    minUsiaBulan: 6, minOmzetHarian: 100_000, prosesHari: 7, agunan: false, risiko: 'rendah',
-  },
-  {
-    id: 'bprs-amanah', nama: 'BPRS Amanah', jenis: 'BPR Syariah',
-    plafonMin: 2_000_000, plafonMax: 50_000_000, tenorBulan: 24,
-    hitungBunga: (bi) => bi + 2, basisBunga: 'BI Rate + 2%',
-    minUsiaBulan: 3, minOmzetHarian: 150_000, prosesHari: 5, agunan: false, risiko: 'rendah',
-  },
-  {
-    id: 'bpr-sejahtera', nama: 'BPR Sejahtera', jenis: 'Bank perkreditan rakyat',
-    plafonMin: 5_000_000, plafonMax: 75_000_000, tenorBulan: 24,
-    hitungBunga: (bi) => bi + 3.5, basisBunga: 'BI Rate + 3,5%',
-    minUsiaBulan: 12, minOmzetHarian: 500_000, prosesHari: 10, agunan: true, risiko: 'sedang',
-  },
-  {
-    id: 'kop-makmur', nama: 'Koperasi Makmur', jenis: 'Koperasi simpan pinjam',
-    plafonMin: 1_000_000, plafonMax: 25_000_000, tenorBulan: 18,
-    hitungBunga: (bi) => bi + 4, basisBunga: 'BI Rate + 4%',
-    minUsiaBulan: 3, minOmzetHarian: 100_000, prosesHari: 3, agunan: false, risiko: 'sedang',
-  },
-  {
-    id: 'pinjol-kilat', nama: 'Pinjol Kilat', jenis: 'Fintech pinjaman online',
-    plafonMin: 500_000, plafonMax: 20_000_000, tenorBulan: 6,
-    hitungBunga: (bi) => bi + 10, basisBunga: 'BI Rate + 10%',
-    minUsiaBulan: 0, minOmzetHarian: 0, prosesHari: 1, agunan: false, risiko: 'tinggi',
-  },
-];
-
-/* ---------- format angka ---------- */
-const rupiah = (n: number) => 'Rp ' + Math.round(n).toLocaleString('id-ID');
-const persen = (n: number, d = 2) => n.toFixed(d).replace('.', ',') + '%';
-const ringkas = (n: number) =>
-  n >= 1_000_000 ? `Rp ${+(n / 1_000_000).toFixed(1)} jt`.replace('.', ',')
-  : n >= 1_000 ? `Rp ${Math.round(n / 1_000)} rb`
-  : `Rp ${n}`;
-
-/* ---------- skor kesehatan finansial ---------- */
-type Skor = { total: number; grade: 'A' | 'B' | 'C' | 'D'; komponen: { label: string; nilai: number; maks: number }[] };
-
-function hitungSkorKesehatan(p: Profil): Skor {
-  const clamp = (x: number) => Math.max(0, Math.min(1, x));
-  const komponen = [
-    { label: 'Margin untung', maks: 30, nilai: clamp(p.marginUntung / 0.3) * 30 },
-    { label: 'Rajin mencatat', maks: 25, nilai: clamp(p.hariDicatat30 / 30) * 25 },
-    { label: 'Omzet stabil', maks: 25, nilai: clamp(1 - p.fluktuasiOmzet / 0.5) * 25 },
-    { label: 'Usia usaha', maks: 20, nilai: clamp(p.usiaUsahaBulan / 12) * 20 },
-  ].map((k) => ({ ...k, nilai: Math.round(k.nilai) }));
-  const total = komponen.reduce((a, k) => a + k.nilai, 0);
-  const grade = total >= 80 ? 'A' : total >= 65 ? 'B' : total >= 50 ? 'C' : 'D';
-  return { total, grade, komponen };
-}
-
-/* ---------- rekomendasi (rule-based) ---------- */
 const anuitas = (pokok: number, bungaTahun: number, bulan: number) => {
   const r = bungaTahun / 100 / 12;
   return r === 0 ? pokok / bulan : (pokok * r) / (1 - Math.pow(1 + r, -bulan));
 };
 
-type Rekomendasi = {
-  bank: Bank;
-  bunga: number;
-  pinjaman: number;
-  cicilanBulan: number;
-  cicilanHari: number;
-  rasio: number; // cicilan / untung bulanan
-  layak: boolean;
-  alasan: string[]; // alasan bila tidak layak
-  skor: number; // 0-100, makin tinggi makin cocok
-};
-
-const RISIKO_PENALTI: Record<Risiko, number> = { rendah: 0, sedang: 5, tinggi: 20 };
-
-function calculateRecommendation(p: Profil, banks: Bank[], biRate: number): Rekomendasi[] {
-  const untungBulan = p.omzetHarian * p.marginUntung * p.hariBukaPerBulan;
-
-  return banks
-    .map((bank) => {
-      const bunga = bank.hitungBunga(biRate);
-      const pinjaman = Math.min(p.kebutuhanModal, bank.plafonMax);
-      const cicilanBulan = anuitas(pinjaman, bunga, bank.tenorBulan);
-      const rasio = untungBulan > 0 ? cicilanBulan / untungBulan : 1;
-
-      // Aturan wajib: gagal satu saja = tidak disarankan
-      const alasan: string[] = [];
-      if (p.usiaUsahaBulan < bank.minUsiaBulan) alasan.push(`Usaha minimal ${bank.minUsiaBulan} bulan`);
-      if (p.omzetHarian < bank.minOmzetHarian) alasan.push(`Omzet harian minimal ${rupiah(bank.minOmzetHarian)}`);
-      if (p.kebutuhanModal < bank.plafonMin) alasan.push(`Plafon minimal ${rupiah(bank.plafonMin)}`);
-      if (rasio > BATAS_RASIO_CICILAN) alasan.push(`Cicilan ${Math.round(rasio * 100)}% dari untung (batas aman ${BATAS_RASIO_CICILAN * 100}%)`);
-
-      // Skor kecocokan: mulai 100, dikurangi mahalnya bunga, risiko, dan agunan
-      const skor = Math.max(0, Math.round(
-        100
-        - (bunga - 6) * 4
-        - RISIKO_PENALTI[bank.risiko]
-        - (bank.agunan ? 5 : 0)
-        + (bank.prosesHari <= 2 ? 5 : 0),
-      ));
-
-      return { bank, bunga, pinjaman, cicilanBulan, cicilanHari: cicilanBulan / 30, rasio, layak: alasan.length === 0, alasan, skor };
-    })
-    .sort((a, b) => Number(b.layak) - Number(a.layak) || b.skor - a.skor || a.bunga - b.bunga);
-}
-
-/* ---------- teks "AI" (mockup, nanti ganti panggilan LLM) ---------- */
-function buatPenjelasan(r: Rekomendasi, p: Profil, urutan: number): string {
-  if (!r.layak) {
-    return `Untuk saat ini ${r.bank.nama} kurang cocok: ${r.alasan.join('; ').toLowerCase()}. Pilihan lain di atas lebih sesuai dengan kemampuan usaha Anda.`;
-  }
-  const awal = urutan === 0 ? 'Ini pilihan paling cocok. ' : '';
-  const agunan = r.bank.agunan ? 'Siapkan agunan karena bank ini memintanya.' : 'Tanpa agunan, jadi lebih ringan di awal.';
-  const risiko = r.bank.risiko === 'tinggi' ? ' Hati-hati: bunganya jauh di atas pilihan lain, sebaiknya jadi opsi terakhir.' : '';
-  return `${awal}Karena omzet Anda stabil di ${ringkas(p.omzetHarian)}/hari, cicilan sekitar ${rupiah(r.cicilanHari)}/hari dari ${r.bank.nama} ini ${r.rasio <= 0.2 ? 'sangat aman' : 'masih aman'} untuk cashflow Anda (${Math.round(r.rasio * 100)}% dari untung bulanan). ${agunan}${risiko}`;
-}
-
-/* =====================================================================
- * 2. KOMPONEN UI
- * ===================================================================== */
-
-const warnaBunga = (b: number) => (b <= BATAS_BUNGA_MURAH ? 'text-emerald-600' : 'text-red-600');
-
-/* ---------- Angka naik dari 0 ---------- */
-function CountUp({ ke }: { ke: number }) {
-  const reduce = useReducedMotion();
-  const [n, setN] = useState(reduce ? ke : 0);
-  useEffect(() => {
-    if (reduce) { setN(ke); return; }
-    const kontrol = animate(0, ke, { duration: 1.1, ease: 'easeOut', onUpdate: (v) => setN(Math.round(v)) });
-    return () => kontrol.stop();
-  }, [ke, reduce]);
-  return <>{n}</>;
-}
-
-/* ---------- Papan skor UMKM ---------- */
-function PapanSkor({ profil }: { profil: Profil }) {
-  const skor = useMemo(() => hitungSkorKesehatan(profil), [profil]);
-  const untungBulan = profil.omzetHarian * profil.marginUntung * profil.hariBukaPerBulan;
-  const warna = skor.grade === 'A' ? 'text-emerald-600' : skor.grade === 'B' ? 'text-amber-500' : 'text-red-600';
-  const warnaBar = skor.grade === 'A' ? 'bg-emerald-500' : skor.grade === 'B' ? 'bg-amber-400' : 'bg-red-500';
-
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Skor Kesehatan Finansial</p>
-
-      <div className="mt-2 flex items-end justify-between">
-        <div className="flex items-baseline gap-1">
-          <span className={`text-5xl font-extrabold tabular-nums ${warna}`}><CountUp ke={skor.total} /></span>
-          <span className="text-sm font-semibold text-slate-400">/100</span>
-        </div>
-        <div className="text-right">
-          <p className="text-xs font-semibold text-slate-500">Grade</p>
-          <motion.p
-            initial={{ scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 14, delay: 0.5 }}
-            className={`text-4xl font-extrabold leading-none ${warna}`}
-          >
-            {skor.grade}
-          </motion.p>
-        </div>
-      </div>
-
-      <div className="mt-4 grid gap-2.5">
-        {skor.komponen.map((k, i) => (
-          <div key={k.label}>
-            <div className="flex justify-between text-xs font-semibold text-slate-600">
-              <span>{k.label}</span>
-              <span className="tabular-nums">{k.nilai}/{k.maks}</span>
-            </div>
-            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-              <motion.div
-                className={`h-full rounded-full ${warnaBar}`}
-                initial={{ width: 0 }} animate={{ width: `${(k.nilai / k.maks) * 100}%` }}
-                transition={{ duration: 0.8, delay: 0.15 * i, ease: 'easeOut' }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-        {[
-          ['Omzet/hari', ringkas(profil.omzetHarian)],
-          ['Untung/bulan', ringkas(untungBulan)],
-          ['Butuh modal', ringkas(profil.kebutuhanModal)],
-        ].map(([l, v]) => (
-          <div key={l} className="rounded-xl bg-slate-50 py-2">
-            <p className="text-[11px] font-semibold text-slate-500">{l}</p>
-            <p className="text-sm font-bold tabular-nums text-slate-900">{v}</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/* ---------- Teks mengetik ala AI ---------- */
-function Typewriter({ text }: { text: string }) {
-  const reduce = useReducedMotion();
-  const [n, setN] = useState(reduce ? text.length : 0);
-  useEffect(() => {
-    if (reduce) { setN(text.length); return; }
-    setN(0);
-    const t = setInterval(() => setN((v) => (v >= text.length ? v : v + 2)), 18);
-    return () => clearInterval(t);
-  }, [text, reduce]);
-  return (
-    <p className="text-sm leading-relaxed text-slate-700">
-      {text.slice(0, n)}
-      {n < text.length && <span className="animate-pulse">▍</span>}
-    </p>
-  );
-}
-
-/* ---------- Kartu bank (accordion) ---------- */
-function KartuBank({ r, urutan, terbuka, onToggle, profil }: {
-  r: Rekomendasi; urutan: number; terbuka: boolean; onToggle: () => void; profil: Profil;
-}) {
-  const { bank } = r;
-  const Ikon = r.bunga <= BATAS_BUNGA_MURAH ? TrendingDown : TrendingUp;
-  const penjelasan = useMemo(() => buatPenjelasan(r, profil, urutan), [r, profil, urutan]);
-
-  return (
-    <motion.article
-      initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: urutan * 0.07, type: 'spring', stiffness: 260, damping: 26 }}
-      className={`overflow-hidden rounded-2xl border bg-white shadow-sm ${terbuka ? 'border-slate-400' : 'border-slate-200'} ${r.layak ? '' : 'opacity-75'}`}
-    >
-      <button
-        type="button" onClick={onToggle} aria-expanded={terbuka}
-        className="flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent p-4 text-left font-[inherit] text-inherit"
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <h3 className="m-0 text-base font-bold text-slate-900">{bank.nama}</h3>
-            {r.layak && urutan === 0 && (
-              <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">Paling Cocok</span>
-            )}
-            {!r.layak && (
-              <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">Kurang cocok</span>
-            )}
-          </div>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Plafon maks <span className="font-semibold tabular-nums text-slate-700">{ringkas(bank.plafonMax)}</span>
-          </p>
-        </div>
-
-        <div className="text-right">
-          <div className={`flex items-center justify-end gap-1 text-lg font-extrabold tabular-nums ${warnaBunga(r.bunga)}`}>
-            <Ikon size={16} />
-            {persen(r.bunga)}
-          </div>
-          <p className="text-[11px] text-slate-400">{bank.basisBunga}</p>
-        </div>
-
-        <ChevronDown size={18} className={`shrink-0 text-slate-400 transition-transform duration-200 ${terbuka ? 'rotate-180' : ''}`} />
-      </button>
-
-      <AnimatePresence initial={false}>
-        {terbuka && (
-          <motion.div
-            key="isi"
-            initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.28, ease: 'easeInOut' }}
-            className="overflow-hidden"
-          >
-            <div className="grid gap-3 border-t border-slate-100 p-4">
-              <div className="grid grid-cols-3 gap-2 text-center">
-                {[
-                  [`Pinjaman`, ringkas(r.pinjaman)],
-                  ['Cicilan/bulan', rupiah(r.cicilanBulan)],
-                  ['Cicilan/hari', rupiah(r.cicilanHari)],
-                ].map(([l, v]) => (
-                  <div key={l} className="rounded-xl bg-slate-50 px-1 py-2">
-                    <p className="text-[11px] font-semibold text-slate-500">{l}</p>
-                    <p className="text-[13px] font-bold tabular-nums text-slate-900">{v}</p>
-                  </div>
-                ))}
-              </div>
-
-              <p className="m-0 text-xs text-slate-500">
-                Tenor {bank.tenorBulan} bulan · cair ±{bank.prosesHari} hari · {bank.agunan ? 'pakai agunan' : 'tanpa agunan'}
-              </p>
-
-              <div className="rounded-xl bg-slate-900 p-3">
-                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-emerald-400">
-                  {r.layak ? <Sparkles size={14} /> : <TriangleAlert size={14} />}
-                  Penjelasan AI
-                </div>
-                <div className="[&_p]:text-slate-200">
-                  <Typewriter text={penjelasan} />
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.article>
-  );
-}
-
-/* ---------- Halaman ---------- */
-function rentang30HariSampaiKemarin() {
-  // Gunakan tanggal kalender WIB; hari ini belum dihitung karena belum selesai.
-  const akhir = new Date(`${todayISO()}T00:00:00Z`);
-  akhir.setUTCDate(akhir.getUTCDate() - 1);
-  const awal = new Date(akhir);
-  awal.setUTCDate(awal.getUTCDate() - 29);
-  return { start: awal.toISOString().slice(0, 10), end: akhir.toISOString().slice(0, 10) };
-}
-
-export default function RekomendasiModalPage() {
-  const router = useRouter();
-  const [profil, setProfil] = useState<Profil | null>(null);
+export default function NilaiUsahaPage() {
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [nilai, setNilai] = useState<NilaiData>(DATA_KOSONG);
   const [loading, setLoading] = useState(true);
-  const [menyimpan, setMenyimpan] = useState(false);
-  const [error, setError] = useState('');
-  const [editProfil, setEditProfil] = useState(false);
-  const [terbuka, setTerbuka] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    nama_usaha: '',
-    tanggal_mulai_usaha: '',
-    hari_buka_per_bulan: '26',
-    kebutuhan_modal: '',
-  });
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError) throw authError;
-      if (!user) { router.replace('/login'); return; }
-
-      const [hasilProfil, hari] = await Promise.all([
-        supabase.from('business_profiles')
-          .select('nama_usaha,tanggal_mulai_usaha,hari_buka_per_bulan,kebutuhan_modal')
-          .eq('user_id', user.id)
-          .maybeSingle(),
-        (() => {
-          const periode = rentang30HariSampaiKemarin();
-          return fetchHari(periode.start, periode.end);
-        })(),
-      ]);
-
-      if (hasilProfil.error) throw hasilProfil.error;
-      const dataProfil = hasilProfil.data;
-      if (!dataProfil) {
-        setProfil(null);
-        setForm((f) => ({
-          ...f,
-          nama_usaha: user.user_metadata?.nama_usaha ?? f.nama_usaha,
-        }));
-      } else {
-        const profilBaru = buatProfilRekomendasi(dataProfil, hari, user.user_metadata?.nama_usaha ?? 'Usaha Saya');
-        setProfil(profilBaru);
-        setForm({
-          nama_usaha: dataProfil.nama_usaha,
-          tanggal_mulai_usaha: dataProfil.tanggal_mulai_usaha,
-          hari_buka_per_bulan: String(dataProfil.hari_buka_per_bulan),
-          kebutuhan_modal: String(dataProfil.kebutuhan_modal),
-        });
-      }
-    } catch (e) {
-      setError((e as Error).message || 'Gagal memuat data usaha.');
-    } finally {
-      setLoading(false);
-    }
-  }, [router]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const hasil = useMemo(
-    () => profil ? calculateRecommendation(profil, mockBanks, currentBiRate) : [],
-    [profil],
-  );
+  const [loadError, setLoadError] = useState('');
+  const [pinjamanSimulasi, setPinjamanSimulasi] = useState(5000000);
+  const [tenorSimulasi, setTenorSimulasi] = useState(12);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
-    setTerbuka(hasil[0]?.bank.id ?? null);
-  }, [hasil]);
+    let aktif = true;
 
-  async function simpanProfil(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError('');
-    setMenyimpan(true);
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError) throw authError;
-      if (!user) { router.replace('/login'); return; }
+    async function muatNilai() {
+      try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError) throw new Error(authError.message);
 
-      const payload = {
-        user_id: user.id,
-        nama_usaha: form.nama_usaha.trim(),
-        tanggal_mulai_usaha: form.tanggal_mulai_usaha,
-        hari_buka_per_bulan: Number(form.hari_buka_per_bulan),
-        kebutuhan_modal: Number(form.kebutuhan_modal),
-        updated_at: new Date().toISOString(),
-      };
-      if (!payload.nama_usaha || !payload.tanggal_mulai_usaha ||
-          !Number.isInteger(payload.hari_buka_per_bulan) || payload.hari_buka_per_bulan < 1 || payload.hari_buka_per_bulan > 31 ||
-          !Number.isFinite(payload.kebutuhan_modal) || !Number.isInteger(payload.kebutuhan_modal) || payload.kebutuhan_modal <= 0) {
-        throw new Error('Lengkapi nama usaha, tanggal mulai, hari buka, dan kebutuhan modal dengan benar.');
+        if (!user) {
+          if (aktif) setNilai(DATA_KOSONG);
+          return;
+        }
+
+        const akhir = todayISO();
+        const akhirDate = new Date(`${akhir}T12:00:00`);
+        const awalDate = new Date(akhirDate);
+        awalDate.setDate(awalDate.getDate() - 29);
+        const awal = awalDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+
+        const [hari, profilResult] = await Promise.all([
+          fetchHari(awal, akhir),
+          supabase
+            .from('business_profiles')
+            .select('jenis_usaha,bentuk_usaha,bidang_usaha,memiliki_persediaan,metode_pembayaran,onboarding_completed_at')
+            .eq('user_id', user.id)
+            .maybeSingle(),
+        ]);
+
+        if (!aktif) return;
+
+        const tanggalTercatat = new Set(hari.map((item) => item.tanggal));
+        const mingguAktif = new Set<number>();
+
+        hari.forEach((item) => {
+          const tanggal = new Date(`${item.tanggal}T12:00:00`);
+          const selisihHari = Math.floor((akhirDate.getTime() - tanggal.getTime()) / 86400000);
+          const indeksMinggu = Math.floor(selisihHari / 7);
+          const adaPemasukan = item.txs.some(
+            (tx) => tx.jenis === 'penjualan' && Number(tx.jumlah) > 0,
+          );
+          if (indeksMinggu >= 0 && indeksMinggu < 4 && adaPemasukan) {
+            mingguAktif.add(indeksMinggu);
+          }
+        });
+
+        const profil = profilResult.data;
+        const profilLengkap = Boolean(
+          profil?.jenis_usaha &&
+          profil?.bentuk_usaha &&
+          profil?.bidang_usaha?.trim() &&
+          profil?.memiliki_persediaan !== null &&
+          profil?.memiliki_persediaan !== undefined &&
+          profil?.metode_pembayaran &&
+          profil?.onboarding_completed_at,
+        );
+
+        const hariTercatat = tanggalTercatat.size;
+        setNilai({
+          loggedIn: true,
+          hariTercatat,
+          mingguBerpemasukan: mingguAktif.size,
+          profilLengkap,
+          laporanTersedia: hariTercatat > 0,
+        });
+
+        if (profilResult.error) {
+          setLoadError('Sebagian informasi profil belum dapat dibaca. Periksa kembali profil usaha Anda.');
+        }
+      } catch (error) {
+        if (aktif) {
+          setLoadError(error instanceof Error ? error.message : 'Data nilai usaha belum dapat dimuat.');
+        }
+      } finally {
+        if (aktif) setLoading(false);
       }
+    }
 
-      const { error: simpanError } = await supabase
-        .from('business_profiles')
-        .upsert(payload, { onConflict: 'user_id' });
-      if (simpanError) throw simpanError;
+    void muatNilai();
+    return () => {
+      aktif = false;
+    };
+  }, []);
 
-      // Samakan nama usaha di metadata agar halaman lama (Kasir/Statistik) tetap memakai nama yang sama.
-      await supabase.auth.updateUser({ data: { nama_usaha: payload.nama_usaha } });
-      setEditProfil(false);
-      await load();
-    } catch (e) {
-      setError((e as Error).message || 'Gagal menyimpan profil usaha.');
+  const skor = useMemo(() => {
+    const pencatatan = Math.min(nilai.hariTercatat, 30) / 30;
+    const pemasukan = Math.min(nilai.mingguBerpemasukan, 4) / 4;
+    return Math.round(
+      pencatatan * 35 +
+      pemasukan * 25 +
+      (nilai.profilLengkap ? 25 : 0) +
+      (nilai.laporanTersedia ? 15 : 0),
+    );
+  }, [nilai]);
+
+  const statusSkor = loading
+    ? 'Memeriksa data'
+    : !nilai.loggedIn
+      ? 'Mode tamu'
+      : skor >= 85
+        ? 'Catatan usaha kuat'
+        : skor >= 65
+          ? 'Hampir siap'
+          : skor >= 40
+            ? 'Sedang berkembang'
+            : 'Mulai membangun catatan';
+
+  const deskripsiSkor = loading
+    ? 'CAVA sedang menghitung ringkasan dari catatan usaha Anda.'
+    : !nilai.loggedIn
+      ? 'Masuk ke akun agar penilaian dihitung dari catatan usaha yang tersimpan.'
+      : nilai.hariTercatat === 0
+        ? 'Belum ada pencatatan dalam 30 hari terakhir. Mulai dari mencatat transaksi harian.'
+        : 'Nilai ini dirangkum dari konsistensi pencatatan, aktivitas pemasukan, kelengkapan profil, dan ketersediaan laporan.';
+
+  const kriteria = [
+    {
+      selesai: nilai.hariTercatat >= 24,
+      judul: `Pencatatan ${nilai.hariTercatat} dari 30 hari`,
+      detail: 'Target konsistensi pencatatan minimal 24 hari.',
+    },
+    {
+      selesai: nilai.mingguBerpemasukan >= 4,
+      judul: `Pemasukan tercatat di ${nilai.mingguBerpemasukan} dari 4 pekan`,
+      detail: 'Usahakan ada transaksi pemasukan pada setiap pekan.',
+    },
+    {
+      selesai: nilai.profilLengkap,
+      judul: 'Profil usaha lengkap',
+      detail: 'Jenis, bentuk, bidang, persediaan, dan metode pembayaran sudah diisi.',
+    },
+    {
+      selesai: nilai.laporanTersedia,
+      judul: 'Data 30 hari tersedia untuk dirangkum',
+      detail: 'Catatan harian akan menjadi dasar laporan usaha.',
+    },
+  ];
+
+  const cicilanPerBulan = useMemo(
+    () => Math.round(anuitas(pinjamanSimulasi, 6, tenorSimulasi)),
+    [pinjamanSimulasi, tenorSimulasi],
+  );
+
+  async function handleDownloadPdf() {
+    if (!areaRef.current || downloading) return;
+    setDownloading(true);
+    try {
+      await exportPdf(
+        areaRef.current,
+        `CAVA-Rapor-Nilai-Usaha-${todayISO()}.pdf`,
+        'CAVA · Rapor Nilai Usaha',
+      );
+    } catch (error) {
+      console.error('Gagal membuat rapor PDF:', error);
+      setLoadError('Rapor PDF belum berhasil dibuat. Silakan coba lagi.');
     } finally {
-      setMenyimpan(false);
+      setDownloading(false);
     }
   }
 
   return (
-    <main className="min-h-screen">
-      <div className="mx-auto grid max-w-[480px] gap-4 px-4 pb-28 pt-5">
-        <header className="flex items-start justify-between gap-3">
-          <div>
-            <h1 className="m-0 text-xl font-extrabold tracking-tight text-slate-900">Rekomendasi Modal</h1>
-            <p className="mt-1 text-xs font-semibold text-slate-500">
-              {profil ? `${profil.nama} · butuh ${ringkas(profil.kebutuhanModal)}` : 'Gunakan catatan usaha dari akun Anda'}
-            </p>
-          </div>
-          <div className="rounded-xl bg-slate-900 px-3 py-1.5 text-right">
-            <p className="text-[10px] font-semibold uppercase text-slate-400">BI Rate</p>
-            <p className="text-sm font-bold tabular-nums text-white">{persen(currentBiRate)}</p>
-          </div>
-        </header>
-
-        {error && <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-        {loading && <p className="text-center text-sm text-slate-500">Memuat data usaha dari Supabase…</p>}
-
-        {!loading && (!profil || editProfil) && (
-          <form onSubmit={simpanProfil} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div>
-              <h2 className="m-0 text-sm font-extrabold text-slate-900">Profil usaha</h2>
-              <p className="mt-1 text-xs text-slate-500">Data ini tersimpan khusus untuk akun yang sedang login.</p>
-            </div>
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              Nama usaha
-              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" required value={form.nama_usaha}
-                onChange={(e) => setForm((f) => ({ ...f, nama_usaha: e.target.value }))} placeholder="Contoh: Warung Makan Berkah" />
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              Mulai menjalankan usaha
-              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="date" required max={todayISO()} value={form.tanggal_mulai_usaha}
-                onChange={(e) => setForm((f) => ({ ...f, tanggal_mulai_usaha: e.target.value }))} />
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              Rata-rata hari buka per bulan
-              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="number" min="1" max="31" required value={form.hari_buka_per_bulan}
-                onChange={(e) => setForm((f) => ({ ...f, hari_buka_per_bulan: e.target.value }))} />
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              Kebutuhan modal yang diajukan (Rp)
-              <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="number" min="1" step="1" required value={form.kebutuhan_modal}
-                onChange={(e) => setForm((f) => ({ ...f, kebutuhan_modal: e.target.value }))} placeholder="Contoh: 10000000" />
-            </label>
-            <button className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white disabled:opacity-50" disabled={menyimpan}>
-              {menyimpan ? 'Menyimpan…' : 'Simpan profil usaha'}
-            </button>
-            {profil && <button type="button" className="text-sm font-semibold text-slate-500" onClick={() => setEditProfil(false)}>Batal</button>}
-          </form>
-        )}
-
-        {!loading && profil && !editProfil && (
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-            <p className="m-0 text-xs text-slate-600">Profil usaha tersimpan. Analisis memakai catatan kasir 30 hari terakhir.</p>
-            <button type="button" className="shrink-0 text-xs font-bold text-slate-900 underline" onClick={() => setEditProfil(true)}>Ubah</button>
-          </div>
-        )}
-
-        {!loading && profil && profil.hariDicatat30 === 0 && !editProfil && (
-          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            Belum ada catatan kasir dalam 30 hari terakhir. Mulai catat modal harian, penjualan, dan biaya di halaman Kasir agar rekomendasi dapat dihitung dari data usaha Anda.
-          </section>
-        )}
-
-        {!loading && profil && profil.hariDicatat30 > 0 && !editProfil && (
-          <>
-            <PapanSkor profil={profil} />
-            <section className="grid gap-3">
-              <div>
-                <h2 className="m-0 text-sm font-extrabold text-slate-900">Pilihan untuk Anda</h2>
-                <p className="mt-0.5 text-xs text-slate-500">Diurutkan berdasarkan kecocokan dengan catatan usaha akun ini.</p>
-              </div>
-              {hasil.map((r, i) => (
-                <KartuBank
-                  key={r.bank.id} r={r} urutan={i} profil={profil}
-                  terbuka={terbuka === r.bank.id}
-                  onToggle={() => setTerbuka((t) => (t === r.bank.id ? null : r.bank.id))}
-                />
-              ))}
-            </section>
-          </>
-        )}
-
-        <p className="m-0 text-center text-[11px] text-slate-400">
-          Profil dan perhitungan omzet berasal dari akun Anda. Daftar lembaga, bunga, dan plafon di halaman ini masih data simulasi, bukan penawaran resmi. Verifikasi langsung ke lembaga keuangan sebelum mengambil keputusan.
-        </p>
+    <div className="wrap" ref={areaRef}>
+      <div className="header-app">
+        <div className="min-w-0">
+          <h1>Nilai Usaha</h1>
+          <p>Ringkasan perkembangan 30 hari terakhir</p>
+        </div>
+        <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/10 text-[#CEE5D6]">
+          <TrendingUp size={22} />
+        </div>
       </div>
+
+      {loadError && (
+        <div role="status" className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-800">
+          {loadError}
+        </div>
+      )}
+
+      <Rise delay={0.02}>
+        <section className="relative overflow-hidden rounded-[22px] border border-white/10 bg-[#103A57] p-5 text-white  sm:p-6">
+          <div aria-hidden="true" className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-[#307B8E]/35 blur-3xl" />
+          <div className="relative z-10 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-extrabold tracking-[0.2em] text-[#A9D3C5]">SKOR KESIAPAN USAHA</p>
+              <p className="mt-1 text-[11px] text-white/60">Berdasarkan data yang tercatat di CAVA</p>
+            </div>
+            <span className="rounded-full border border-[#A9D3C5]/25 bg-white/10 px-3 py-1.5 text-[10px] font-extrabold text-[#CEE5D6]">
+              {statusSkor}
+            </span>
+          </div>
+
+          <div className="relative z-10 mt-5 flex items-center gap-5">
+            <div className="relative grid h-28 w-28 shrink-0 place-items-center">
+              <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 100 100" role="img" aria-label={`Skor ${loading ? 'sedang dihitung' : skor + ' dari 100'}`}>
+                <circle cx="50" cy="50" r="40" stroke="rgba(255,255,255,0.14)" strokeWidth="8" fill="transparent" />
+                <motion.circle
+                  cx="50"
+                  cy="50"
+                  r="40"
+                  stroke="#A9D3C5"
+                  strokeWidth="8"
+                  strokeDasharray="251.2"
+                  strokeDashoffset={251.2 * (1 - (loading ? 0 : skor / 100))}
+                  strokeLinecap="round"
+                  fill="transparent"
+                  initial={{ strokeDashoffset: 251.2 }}
+                  animate={{ strokeDashoffset: 251.2 * (1 - (loading ? 0 : skor / 100)) }}
+                  transition={{ duration: 0.8, ease: 'easeOut' }}
+                />
+              </svg>
+              <div className="relative flex flex-col items-center">
+                <span className="text-3xl font-black leading-none tabular-nums text-white">{loading ? '—' : skor}</span>
+                <span className="mt-1 text-[9px] font-bold tracking-wider text-[#A9D3C5]">DARI 100</span>
+              </div>
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-base font-extrabold leading-snug text-white">
+                {loading ? 'Menghitung nilai usaha…' : !nilai.loggedIn ? 'Masuk untuk melihat nilai usaha' : statusSkor}
+              </p>
+              <p className="mt-2 text-[11px] leading-5 text-white/75">{deskripsiSkor}</p>
+              {!nilai.loggedIn && !loading && (
+                <Link href="/login" className="mt-3 inline-flex items-center gap-2 rounded-xl bg-[#A9D3C5] px-3 py-2 text-[10px] font-extrabold text-[#103A57]">
+                  Masuk ke akun <ArrowRight size={13} />
+                </Link>
+              )}
+            </div>
+          </div>
+          <p className="relative z-10 mt-5 border-t border-white/10 pt-3 text-[10px] leading-5 text-white/55">
+            Skor merupakan ringkasan internal CAVA, bukan penilaian resmi bank dan bukan jaminan persetujuan pembiayaan.
+          </p>
+        </section>
+      </Rise>
+
+      <Rise delay={0.05}>
+        <section className="rounded-3xl border border-[#307B8E]/10 bg-white p-5 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-black text-[#103A57]">Aspek penilaian</h2>
+              <p className="mt-1 text-[10px] font-medium text-slate-500">Empat bagian yang membentuk skor usaha</p>
+            </div>
+            <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#CEE5D6]/60 text-[#307B8E]">
+              <CalendarDays size={18} />
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-100">
+            {kriteria.map((item, index) => (
+              <div key={item.judul} className="flex items-start gap-3 py-3.5">
+                <div className="mt-0.5 shrink-0">
+                  {loading ? (
+                    <Circle size={19} className="text-slate-300" />
+                  ) : item.selesai ? (
+                    <CheckCircle2 size={19} className="text-[#366B2B]" />
+                  ) : (
+                    <Circle size={19} className="text-slate-300" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className={`text-xs font-extrabold ${item.selesai ? 'text-[#103A57]' : 'text-slate-600'}`}>{item.judul}</p>
+                  <p className="mt-1 text-[10px] leading-4 text-slate-400">{item.detail}</p>
+                </div>
+                <span className="pt-0.5 text-[9px] font-extrabold text-slate-300">{index + 1}/4</span>
+              </div>
+            ))}
+          </div>
+
+          <Link href="/pengaturan-usaha" className="mt-3 inline-flex items-center gap-2 text-[11px] font-extrabold text-[#307B8E] hover:text-[#103A57]">
+            Periksa profil usaha <ArrowRight size={14} />
+          </Link>
+        </section>
+      </Rise>
+
+      <Rise delay={0.08}>
+        <section className="rounded-3xl border border-[#307B8E]/10 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-extrabold tracking-[0.16em] text-[#307B8E]">PERENCANAAN</p>
+              <h2 className="mt-1 text-sm font-black text-[#103A57]">Simulasi cicilan</h2>
+              <p className="mt-1 text-[10px] leading-4 text-slate-500">Ubah nominal dan tenor untuk melihat perkiraan pembayaran.</p>
+            </div>
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#CEE5D6]/60 text-[#103A57]">
+              <Wallet size={19} />
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl bg-[#CEE5D6]/30 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-bold text-slate-500">Nominal simulasi</span>
+              <strong className="text-sm font-black tabular-nums text-[#103A57]">{rupiah(pinjamanSimulasi)}</strong>
+            </div>
+            <input
+              type="range"
+              min={1000000}
+              max={25000000}
+              step={500000}
+              value={pinjamanSimulasi}
+              onChange={(event) => setPinjamanSimulasi(Number(event.target.value))}
+              className="loan-range mt-4"
+              aria-label="Nominal simulasi pembiayaan"
+            />
+            <div className="mt-1 flex justify-between text-[9px] font-semibold text-slate-400">
+              <span>Rp1 juta</span>
+              <span>Rp25 juta</span>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <p className="mb-2 text-[10px] font-bold text-slate-500">Jangka waktu</p>
+            <div className="grid grid-cols-3 gap-2">
+              {[12, 24, 36].map((bulan) => (
+                <button
+                  key={bulan}
+                  type="button"
+                  onClick={() => setTenorSimulasi(bulan)}
+                  aria-pressed={tenorSimulasi === bulan}
+                  className={`rounded-xl border px-3 py-2.5 text-[11px] font-extrabold transition ${tenorSimulasi === bulan ? 'border-[#103A57] bg-[#103A57] text-white shadow-sm' : 'border-[#307B8E]/15 bg-white text-[#103A57] hover:bg-[#CEE5D6]/35'}`}
+                >
+                  {bulan} bulan
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-end justify-between gap-3 rounded-2xl bg-[#103A57] p-4 text-white">
+            <div>
+              <p className="text-[10px] font-bold text-[#A9D3C5]">Perkiraan cicilan per bulan</p>
+              <p className="mt-1 text-xl font-black tabular-nums">{rupiah(cicilanPerBulan)}</p>
+            </div>
+            <span className="pb-1 text-[9px] font-bold text-white/65">{tenorSimulasi} bulan</span>
+          </div>
+          <p className="mt-3 flex items-start gap-2 text-[10px] leading-4 text-slate-400">
+            <Info size={13} className="mt-0.5 shrink-0 text-[#307B8E]" />
+            Contoh perhitungan dengan asumsi bunga 6% per tahun. Angka sebenarnya bergantung pada lembaga pembiayaan dan ketentuan yang berlaku.
+          </p>
+        </section>
+      </Rise>
+
+      <Rise delay={0.1}>
+        <button
+          type="button"
+          onClick={handleDownloadPdf}
+          disabled={downloading || loading || !nilai.loggedIn}
+          className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#103A57] px-5 py-4 text-xs font-extrabold text-white shadow-lg shadow-[#103A57]/15 transition hover:bg-[#174968] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Download size={17} />
+          {downloading ? 'Menyiapkan PDF…' : 'Unduh rapor usaha'}
+        </button>
+        {!nilai.loggedIn && !loading && (
+          <p className="mt-2 text-center text-[10px] font-semibold text-slate-400">Masuk ke akun untuk membuat rapor dari data tersimpan.</p>
+        )}
+      </Rise>
 
       <BottomNav />
-    </main>
+    </div>
   );
 }

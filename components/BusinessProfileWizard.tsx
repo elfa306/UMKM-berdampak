@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { todayISO } from '@/lib/accounting';
+import BottomNav from '@/components/BottomNav';
 
 type JenisUsaha = 'retail' | 'manufaktur' | 'jasa' | 'campuran';
 type BentukUsaha = 'perorangan' | 'pt_perorangan' | 'cv' | 'pt' | 'koperasi' | 'lainnya';
@@ -122,8 +123,22 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
     setError('');
     try {
       const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError) throw authError;
-      if (!user) { router.replace('/login'); return; }
+      if (!user) {
+        setUserId('guest');
+        setForm({
+          nama_usaha: '[Nama Usaha]',
+          tanggal_mulai_usaha: '2024-01-15',
+          hari_buka_per_bulan: '26',
+          kebutuhan_modal: '5000000',
+          jenis_usaha: 'campuran',
+          bentuk_usaha: 'perorangan',
+          bidang_usaha: 'Makanan & Minuman (Kedai Kopi & Roti)',
+          memiliki_persediaan: 'ya',
+          metode_pembayaran: 'manual',
+        });
+        setLoading(false);
+        return;
+      }
       setUserId(user.id);
 
       const { data, error: profileError } = await supabase
@@ -141,7 +156,8 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
 
       const profil = (data ?? null) as ProfilTersimpan | null;
       if (editMode && !profil) {
-        router.replace('/onboarding');
+        setForm({ ...FORM_AWAL, nama_usaha: user.user_metadata?.nama_usaha ?? '[Nama Usaha]' });
+        setLoading(false);
         return;
       }
       setForm(keForm(profil, user.user_metadata?.nama_usaha ?? ''));
@@ -199,6 +215,11 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
     e.preventDefault();
     if (step !== 2 || !validasiStep()) return;
     if (!userId) { setError('Sesi login tidak ditemukan. Silakan masuk kembali.'); return; }
+    if (userId === 'guest') {
+      setNotice('Profil usaha berhasil diperbarui (Mode Tamu).');
+      if (!editMode) router.replace('/kasir');
+      return;
+    }
     setSaving(true);
     setError('');
     setNotice('');
@@ -399,6 +420,7 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
           <p className="m-0">Informasi ini dipakai untuk menyesuaikan fitur UMKM Berdampak. Pilihan bentuk usaha bukan pemeriksaan legalitas dan metode pembayaran tidak mengaktifkan layanan pihak ketiga secara otomatis.</p>
         </div>
         {!editMode && <p className="m-0 text-center text-xs text-slate-400">Profil dapat diperbarui kapan saja melalui menu Pengaturan Usaha.</p>}
+        {editMode && <BottomNav />}
       </div>
     </main>
   );
