@@ -55,7 +55,82 @@ export default function Harga() {
     if (!senyap) { setLoading(true); setErr(''); setKosong(false); }
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.replace('/login'); return; }
+      if (!user) {
+        setPaket({
+          produk: ['Kopi Cava Latte', 'Roti Bakar Kaya'],
+          tanpaBahan: [],
+          sumber: 'kamus',
+          punyaRiwayat: true,
+          kartu: [
+            {
+              nama: 'Gula Pasir Kristal 1 kg',
+              produk: ['Kopi Cava Latte', 'Roti Bakar Kaya'],
+              median: 17500,
+              perubahan: 2.1,
+              pembanding: 'kemarin',
+              termurah: {
+                judul: 'Gulaku Tebu Murni Kuning 1kg',
+                harga: 16900,
+                toko: 'Tokopedia Grosir',
+                rating: 4.9,
+                ulasan: 1420,
+                link: 'https://tokopedia.com',
+                gambar: null,
+              },
+            },
+            {
+              nama: 'Susu UHT Fresh Milk 1 Liter',
+              produk: ['Kopi Cava Latte'],
+              median: 20500,
+              perubahan: -1.4,
+              pembanding: 'kemarin',
+              termurah: {
+                judul: 'Greenfields / Diamond UHT Milk Plain 1L',
+                harga: 19800,
+                toko: 'Shopee Mall',
+                rating: 4.8,
+                ulasan: 890,
+                link: 'https://shopee.co.id',
+                gambar: null,
+              },
+            },
+            {
+              nama: 'Biji Kopi Robusta Blend 1 kg',
+              produk: ['Kopi Cava Latte'],
+              median: 95000,
+              perubahan: 0,
+              pembanding: 'kemarin',
+              termurah: {
+                judul: 'Robusta Dampit Medium Roast 1kg Fresh',
+                harga: 89000,
+                toko: 'Roastery Nusantara',
+                rating: 4.9,
+                ulasan: 630,
+                link: 'https://tokopedia.com',
+                gambar: null,
+              },
+            },
+            {
+              nama: 'Roti Tawar Gandum & Bandung',
+              produk: ['Roti Bakar Kaya'],
+              median: 15000,
+              perubahan: -3.2,
+              pembanding: 'kemarin',
+              termurah: {
+                judul: 'Roti Kasino Toast Bread 1 loaf',
+                harga: 13500,
+                toko: 'Pusat Bahan Roti',
+                rating: 4.7,
+                ulasan: 310,
+                link: 'https://tokopedia.com',
+                gambar: null,
+              },
+            },
+          ],
+        });
+        setLoading(false);
+        return;
+      }
       const { data: { session } } = await supabase.auth.getSession();
       const auth = { Authorization: `Bearer ${session?.access_token ?? ''}` };
       const hariIni = todayISO();

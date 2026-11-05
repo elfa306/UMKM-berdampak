@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { ArrowLeft, BookOpen, Calculator, CheckCircle2, ClipboardList, Download, FileText, Plus, RefreshCw, Scale, Wallet } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import BottomNav from '@/components/BottomNav';
 
 type Mode = 'demo' | 'production';
 type Account = { code: string; name: string; type: string; debit: number; credit: number; balance: number };
@@ -41,20 +42,29 @@ export default function AccountingDashboard({ mode, businessName }: { mode: Mode
   const [notice, setNotice] = useState('');
   const [showEntry, setShowEntry] = useState(false);
   const [form, setForm] = useState({ kind: 'expense', amount: '', description: '', paymentAccount: '1000' });
-
   const headers = useCallback(async (): Promise<HeadersInit> => {
     if (isDemo) return {};
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) throw new Error('Sesi login tidak ditemukan. Silakan masuk kembali.');
+    if (!session?.access_token) return {};
     return { Authorization: `Bearer ${session.access_token}` };
   }, [isDemo]);
 
   const reload = useCallback(async () => {
-    const response = await fetch(`${endpoint}?month=${encodeURIComponent(month)}`, { headers: await headers(), credentials: 'same-origin', cache: 'no-store' });
+    let hdrs: HeadersInit = {};
+    let ep = endpoint;
+    if (!isDemo) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        hdrs.Authorization = `Bearer ${session.access_token}`;
+      } else {
+        ep = '/api/demo/akuntansi';
+      }
+    }
+    const response = await fetch(`${ep}?month=${encodeURIComponent(month)}`, { headers: hdrs, credentials: 'same-origin', cache: 'no-store' });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Laporan akuntansi gagal dimuat.');
     setSnapshot(data as Snapshot);
-  }, [endpoint, headers, month]);
+  }, [endpoint, isDemo, month]);
 
   useEffect(() => { let active = true; setLoading(true); setError(''); reload().catch((e) => { if (active) setError(e instanceof Error ? e.message : 'Laporan gagal dimuat.'); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [reload]);
 
@@ -105,25 +115,75 @@ export default function AccountingDashboard({ mode, businessName }: { mode: Mode
   const row = (label: string, value: number, strong = false, indent = false) => <div key={label} className={`flex items-center justify-between gap-3 border-b border-slate-100 py-3 text-sm ${indent ? 'pl-4' : ''}`}><span className={strong ? 'font-extrabold text-slate-900' : 'text-slate-600'}>{label}</span><span className={`tabular-nums ${strong ? 'font-black text-slate-900' : 'font-semibold text-slate-700'}`}>{IDR.format(value)}</span></div>;
 
   return (
-    <main className={`min-h-screen px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-7 ${isDemo ? 'bg-slate-50' : 'bg-[#f6f8f7]'}`}>
+    <main className={`min-h-screen px-4 pb-24 pt-5 text-slate-900 sm:px-6 sm:pt-7 ${isDemo ? 'bg-[#CEE5D6]/30' : 'bg-[#CEE5D6]'}`}>
       <div className="mx-auto max-w-6xl">
-        <header className="flex flex-wrap items-center justify-between gap-3"><Link href={backHref} className="inline-flex items-center gap-2 text-sm font-bold text-slate-600"><ArrowLeft size={16}/>{isDemo ? 'Dashboard demo' : 'Menu lainnya'}</Link><span className={`rounded-full px-3 py-1.5 text-[11px] font-extrabold ${isDemo ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'border border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{isDemo ? 'DEMO MODE' : 'AKUNTANSI USAHA'}</span></header>
-        <section className="mt-5 rounded-3xl bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 p-5 text-white shadow-lg sm:p-7">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex items-start gap-3"><span className="rounded-2xl bg-white/10 p-3"><Calculator size={25}/></span><div><p className="text-xs font-bold tracking-wide text-blue-200">FINANCIAL ACCOUNTING</p><h1 className="mt-1 text-2xl font-black sm:text-3xl">Akuntansi & Laporan</h1><p className="mt-2 text-sm text-slate-300">{businessName ? `${businessName} · ` : ''}Jurnal berpasangan, laporan laba rugi, dan posisi keuangan.</p></div></div><button onClick={() => setShowEntry(true)} className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-3 text-xs font-extrabold text-slate-950 hover:bg-emerald-400"><Plus size={15}/> Catat transaksi</button></div>
-          <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">{[{ label: 'Pendapatan bulan ini', value: pl.revenue }, { label: 'Laba bersih bulan ini', value: pl.netProfit }, { label: 'Aset tercatat', value: bs.assets }, { label: 'Kas + Bank', value: bs.cash }].map((m) => <div key={m.label} className="rounded-2xl bg-white/10 p-3"><p className="text-[11px] text-slate-300">{m.label}</p><p className="mt-1 break-words text-base font-black sm:text-lg">{IDR.format(m.value)}</p></div>)}</div>
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <Link href={backHref} className="inline-flex items-center gap-2 text-xs font-bold text-[#103A57] bg-white/70 px-3 py-1.5 rounded-xl border border-[#307B8E]/20 hover:bg-white shadow-xs">
+            <ArrowLeft size={15}/>
+            {isDemo ? 'Dashboard Demo' : 'Menu Lainnya'}
+          </Link>
+          <span className={`rounded-full px-3 py-1 text-[11px] font-black ${isDemo ? 'border border-amber-300 bg-amber-100 text-amber-900' : 'border border-white/20 bg-[#103A57] text-[#A9D3C5]'}`}>
+            {isDemo ? 'DEMO MODE' : 'AKUNTANSI USAHA'}
+          </span>
+        </header>
+
+        <section className="mt-4 rounded-3xl bg-[#103A57] p-5 text-white shadow-xl sm:p-7 border border-white/10">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="rounded-2xl bg-white/10 p-3 text-[#A9D3C5]">
+                <Calculator size={26}/>
+              </span>
+              <div>
+                <p className="text-xs font-bold tracking-wider text-[#A9D3C5] uppercase">FINANCIAL ACCOUNTING</p>
+                <h1 className="mt-1 text-2xl font-black sm:text-3xl tracking-tight">Akuntansi &amp; Laporan</h1>
+                <p className="mt-1 text-xs text-white/80">{businessName ? `${businessName} · ` : ''}Jurnal berpasangan, laporan laba rugi, dan posisi keuangan SAK EMKM.</p>
+              </div>
+            </div>
+            <button onClick={() => setShowEntry(true)} className="inline-flex items-center gap-2 rounded-xl bg-[#A9D3C5] px-4 py-2.5 text-xs font-black text-[#103A57] hover:bg-white transition shadow-md">
+              <Plus size={15}/> Catat Jurnal
+            </button>
+          </div>
+          <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[{ label: 'Pendapatan bulan ini', value: pl.revenue }, { label: 'Laba bersih bulan ini', value: pl.netProfit }, { label: 'Aset tercatat', value: bs.assets }, { label: 'Kas + Bank', value: bs.cash }].map((m) => (
+              <div key={m.label} className="rounded-2xl bg-white/10 p-3 border border-white/10">
+                <p className="text-[10px] text-white/70 font-semibold uppercase">{m.label}</p>
+                <p className="mt-1 break-words text-base font-black sm:text-lg text-emerald-300">{IDR.format(m.value)}</p>
+              </div>
+            ))}
+          </div>
         </section>
 
-        {error && <div role="alert" className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-        {notice && <div role="status" className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</div>}
+        {error && <div role="alert" className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-3.5 text-xs font-medium text-red-800">{error}</div>}
+        {notice && <div role="status" className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3.5 text-xs font-semibold text-emerald-800">{notice}</div>}
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-          <label className="text-xs font-bold text-slate-600">Periode laporan<input aria-label="Periode laporan" type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="ml-2 rounded-xl border border-slate-200 bg-white p-2.5 text-sm font-semibold"/></label>
+          <label className="text-xs font-bold text-slate-700 flex items-center gap-2">
+            Periode laporan:
+            <input aria-label="Periode laporan" type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#103A57]"/>
+          </label>
           <div className="flex flex-wrap gap-2">
-            {!isDemo && <button onClick={downloadMonthlyExcel} disabled={exporting} className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2.5 text-xs font-extrabold text-white disabled:opacity-50"><Download size={14}/> {exporting ? 'Menyiapkan Excel…' : 'Unduh laporan bulanan Excel'}</button>}
-            <button onClick={() => reload().catch((e) => setError(e.message))} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-extrabold text-slate-600"><RefreshCw size={14}/> Muat ulang</button>
+            {!isDemo && (
+              <button onClick={downloadMonthlyExcel} disabled={exporting} className="inline-flex items-center gap-2 rounded-xl bg-[#103A57] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#0c2d44] disabled:opacity-50 shadow-sm transition">
+                <Download size={14}/> {exporting ? 'Menyiapkan Excel…' : 'Unduh Excel Bulanan'}
+              </button>
+            )}
+            <button onClick={() => reload().catch((e) => setError(e.message))} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-xs transition">
+              <RefreshCw size={14}/> Muat Ulang
+            </button>
           </div>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm sm:grid-cols-5">{([{ id: 'profit', label: 'Laba Rugi', icon: FileText }, { id: 'balance', label: 'Posisi Keuangan', icon: Scale }, { id: 'cash', label: 'Arus Kas', icon: Wallet }, { id: 'notes', label: 'Catatan', icon: ClipboardList }, { id: 'journals', label: 'Jurnal', icon: BookOpen }] as const).map((t) => { const Icon = t.icon; return <button key={t.id} onClick={() => setTab(t.id)} className={`flex items-center justify-center gap-2 rounded-xl px-2 py-3 text-xs font-extrabold sm:text-sm ${tab === t.id ? 'bg-blue-900 text-white' : 'text-slate-600 hover:bg-slate-50'}`}><Icon size={15}/><span>{t.label}</span></button>; })}</div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl border border-[#307B8E]/15 bg-white p-1.5 shadow-sm sm:grid-cols-5">
+          {([{ id: 'profit', label: 'Laba Rugi', icon: FileText }, { id: 'balance', label: 'Posisi Keuangan', icon: Scale }, { id: 'cash', label: 'Arus Kas', icon: Wallet }, { id: 'notes', label: 'Catatan', icon: ClipboardList }, { id: 'journals', label: 'Jurnal', icon: BookOpen }] as const).map((t) => {
+            const Icon = t.icon;
+            return (
+              <button key={t.id} onClick={() => setTab(t.id)} className={`flex items-center justify-center gap-2 rounded-xl px-2 py-2.5 text-xs font-black sm:text-sm transition ${tab === t.id ? 'bg-[#103A57] text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}>
+                <Icon size={15}/>
+                <span>{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
 
         {loading ? <div className="mt-6 rounded-2xl bg-white p-8 text-center text-sm text-slate-500">Menghitung laporan keuangan…</div> : null}
         {!loading && tab === 'profit' && <section className="mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
@@ -141,7 +201,8 @@ export default function AccountingDashboard({ mode, businessName }: { mode: Mode
 
         <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-900"><b>Catatan penggunaan laporan.</b> {snapshot.note || 'Laporan keuangan bersifat pencatatan manajerial. Pastikan saldo awal kas/bank, piutang, utang, aset tetap, pajak, dan penyesuaian periode dicatat sebelum digunakan sebagai laporan formal. Format ini mendukung struktur dasar SAK EMKM, tetapi tidak menggantikan pemeriksaan akuntan atau kewajiban pajak.'}</div>
 
-        {showEntry && <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4"><form onSubmit={saveEntry} className="my-6 w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl"><div className="flex items-center justify-between"><b>Catat jurnal manual</b><button type="button" onClick={() => setShowEntry(false)} className="text-slate-400">✕</button></div><p className="mt-1 text-xs leading-5 text-slate-500">Pilih jenis kejadian. Sistem akan membuat jurnal debit-kredit seimbang secara otomatis.</p><label className="mt-4 block text-xs font-bold">Jenis transaksi<select value={form.kind} onChange={(e) => setForm((v) => ({ ...v, kind: e.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="expense">Beban operasional</option><option value="capital">Setoran modal pemilik</option><option value="draw">Pengambilan pribadi (prive)</option><option value="supplier_payment">Pembayaran utang pemasok</option><option value="labor_payment">Pembayaran utang tenaga kerja produksi</option><option value="overhead_payment">Pembayaran utang overhead produksi</option></select></label><label className="mt-3 block text-xs font-bold">Nominal (Rp)<input required type="number" min="1" step="1" value={form.amount} onChange={(e) => setForm((v) => ({ ...v, amount: e.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm"/></label><label className="mt-3 block text-xs font-bold">Dibayar / diterima melalui<select value={form.paymentAccount} onChange={(e) => setForm((v) => ({ ...v, paymentAccount: e.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="1000">Kas</option><option value="1010">Bank / QRIS</option></select></label><label className="mt-3 block text-xs font-bold">Keterangan<input required maxLength={250} value={form.description} onChange={(e) => setForm((v) => ({ ...v, description: e.target.value }))} placeholder="Contoh: bayar listrik bulan ini" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm"/></label><div className="mt-4 flex gap-2"><button type="button" onClick={() => setShowEntry(false)} className="flex-1 rounded-xl border border-slate-200 p-3 text-sm font-bold">Batal</button><button disabled={busy} className="flex-1 rounded-xl bg-emerald-700 p-3 text-sm font-extrabold text-white">{busy ? 'Menyimpan…' : 'Simpan jurnal'}</button></div></form></div>}
+        {showEntry && <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4"><form onSubmit={saveEntry} className="my-6 w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl"><div className="flex items-center justify-between"><b>Catat jurnal manual</b><button type="button" onClick={() => setShowEntry(false)} className="text-slate-400">✕</button></div><p className="mt-1 text-xs leading-5 text-slate-500">Pilih jenis kejadian. Sistem akan membuat jurnal debit-kredit seimbang secara otomatis.</p><label className="mt-4 block text-xs font-bold">Jenis transaksi<select value={form.kind} onChange={(e) => setForm((v) => ({ ...v, kind: e.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="expense">Beban operasional</option><option value="capital">Setoran modal pemilik</option><option value="draw">Pengambilan pribadi (prive)</option><option value="supplier_payment">Pembayaran utang pemasok</option><option value="labor_payment">Pembayaran utang tenaga kerja produksi</option><option value="overhead_payment">Pembayaran utang overhead produksi</option></select></label><label className="mt-3 block text-xs font-bold">Nominal (Rp)<input required type="number" min="1" step="1" value={form.amount} onChange={(e) => setForm((v) => ({ ...v, amount: e.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm"/></label><label className="mt-3 block text-xs font-bold">Dibayar / diterima melalui<select value={form.paymentAccount} onChange={(e) => setForm((v) => ({ ...v, paymentAccount: e.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="1000">Kas</option><option value="1010">Bank / QRIS</option></select></label><label className="mt-3 block text-xs font-bold">Keterangan<input required maxLength={250} value={form.description} onChange={(e) => setForm((v) => ({ ...v, description: e.target.value }))} placeholder="Contoh: bayar listrik bulan ini" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm"/></label><div className="mt-4 flex gap-2"><button type="button" onClick={() => setShowEntry(false)} className="flex-1 rounded-xl border border-slate-200 p-3 text-sm font-bold">Batal</button><button disabled={busy} className="flex-1 rounded-xl bg-[#103A57] p-3 text-sm font-extrabold text-white">{busy ? 'Menyimpan…' : 'Simpan jurnal'}</button></div></form></div>}
+        <BottomNav />
       </div>
     </main>
   );

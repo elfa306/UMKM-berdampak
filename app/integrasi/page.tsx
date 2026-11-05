@@ -88,7 +88,19 @@ export default function Integrasi() {
     setEndpoint(`${window.location.origin}/api/gopay`);
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return router.replace('/login');
+      if (!user) {
+        setAktif(true);
+        setNamaUsaha('[Nama Usaha]');
+        setMetodeDipilih('gopay_macrodroid');
+        setTerakhir({
+          waktu: new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }),
+          jumlah: 25000,
+          posted: true,
+        });
+        setJumlahSinyal(14);
+        setReady(true);
+        return;
+      }
       const [{ data: tokenRow }, { data: profile }] = await Promise.all([
         supabase.from('webhook_tokens').select('created_at').eq('user_id', user.id).maybeSingle(),
         supabase.from('business_profiles').select('nama_usaha,metode_pembayaran').eq('user_id', user.id).maybeSingle(),
@@ -107,7 +119,12 @@ export default function Integrasi() {
     if (aktif && !confirm('Token lama akan berhenti berlaku dan MacroDroid harus diisi ulang dengan token baru. Lanjutkan?')) return;
     setErr('');
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return router.replace('/login');
+    if (!user) {
+      const baru = Array.from(crypto.getRandomValues(new Uint8Array(32))).map((b) => b.toString(16).padStart(2, '0')).join('');
+      setToken(baru);
+      setAktif(true);
+      return;
+    }
     const baru = Array.from(crypto.getRandomValues(new Uint8Array(32))).map((b) => b.toString(16).padStart(2, '0')).join('');
     const { error } = await supabase.from('webhook_tokens').upsert({ user_id: user.id, token_hash: await sha256hex(baru) });
     if (error) return setErr(error.message);
