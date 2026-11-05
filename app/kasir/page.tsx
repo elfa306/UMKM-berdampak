@@ -104,10 +104,19 @@ export default function Kasir() {
       return;
     }
 
-    const [p, s] = await Promise.all([
+    const [p, s, profil] = await Promise.all([
       supabase.from('products').select('id,nama,harga,stok,stok_minimum,satuan').eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
       supabase.from('daily_sessions').select('id,modal_harian').eq('tanggal', tanggal).maybeSingle(),
+      supabase.from('business_profiles').select('nama_usaha').eq('user_id', user.id).maybeSingle(),
     ]);
+
+    // Nama usaha bersumber dari profil usaha akun yang sedang login.
+    // Metadata Auth menjadi cadangan bila baris profil belum tersedia.
+    const namaProfil = typeof profil.data?.nama_usaha === 'string' ? profil.data.nama_usaha.trim() : '';
+    const namaMetadata = typeof user.user_metadata?.nama_usaha === 'string' ? user.user_metadata.nama_usaha.trim() : '';
+    const namaAkun = typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name.trim() : '';
+    setNamaUsaha(namaProfil || namaMetadata || namaAkun || 'Usaha saya');
+
     setProducts((p.data ?? []).map((x) => ({ ...x, harga: Number(x.harga) })));
     if (s.data) {
       setSesi({ id: s.data.id, modal_harian: Number(s.data.modal_harian) });
