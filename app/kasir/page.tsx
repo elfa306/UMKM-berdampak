@@ -655,7 +655,7 @@ export default function Kasir() {
               <span>Keluar</span>
             </div>
             <div>
-              <b className="tabular-nums">{sembunyikanNominal ? 'Rp •••' : rupiah(modalHarian)}</b>
+              <b className="tabular-nums">{sembunyikanNominal ? 'Rp •••' : rupiah(saldoUsahaSekarang)}</b>
               <span>Saldo usaha</span>
             </div>
           </div>
