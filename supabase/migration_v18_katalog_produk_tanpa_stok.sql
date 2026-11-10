@@ -3,7 +3,7 @@
 -- Riwayat transaksi, pembelian, mutasi, jurnal, dan batch lama tidak dihapus.
 begin;
 
-update public.products set lacak_stok=false,stok=0,stok_minimum=0,updated_at=now()
+update public.products set lacak_stok=false,stok_minimum=0,updated_at=now()
 where jenis_item in ('merchandise','finished_good','service')
   and (lacak_stok is distinct from false or stok<>0 or stok_minimum<>0);
 
@@ -24,7 +24,7 @@ begin
  update public.products set sku=v_sku,nama=btrim(p_name),
   kategori=left(coalesce(nullif(btrim(p_category),''),'Umum'),40),jenis_item=p_item_type,
   satuan=left(coalesce(nullif(btrim(p_unit),''),'pcs'),20),harga=round(p_sale_price,0),
-  harga_pokok=round(p_unit_cost,2),lacak_stok=false,stok=0,stok_minimum=0,updated_at=now()
+  harga_pokok=round(p_unit_cost,2),lacak_stok=false,stok_minimum=0,updated_at=now()
  where id=p_product_id and user_id=v_user returning * into v_product;
  return to_jsonb(v_product);
 exception when unique_violation then raise exception 'duplicate_product_sku';
