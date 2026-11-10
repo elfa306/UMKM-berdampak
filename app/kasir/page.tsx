@@ -185,14 +185,26 @@ export default function Kasir() {
       // Modal_harian dipertahankan hanya untuk kompatibilitas catatan lama.
       // Sesi baru bernilai Rp0 karena saldo awal dihitung dari jurnal kas dan bank.
       await importQris(s.data.id);
-      const [t, pending] = await Promise.all([
+      const [t, pending, saldoSetelahImport] = await Promise.all([
         supabase.from('transactions').select('*').eq('user_id', user.id).eq('session_id', s.data.id).order('created_at'),
         supabase.from('qris_invoice_drafts').select('invoice_no,total').eq('session_id', s.data.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.rpc('get_business_cash_balances', { p_before_date: tanggalBesokISO }),
       ]);
       if (t.error) {
         setErr('Transaksi hari ini gagal dimuat. Muat ulang halaman untuk mencoba lagi.');
       }
       setTxs((t.data ?? []).map((x) => ({ ...x, jumlah: Number(x.jumlah) })) as Tx[]);
+      if (!saldoSetelahImport.error && saldoSetelahImport.data) {
+        setSaldoSaatIni({
+          kas: Number(saldoSetelahImport.data.cash_balance ?? 0),
+          bank: Number(saldoSetelahImport.data.bank_balance ?? 0),
+        });
+        setRingkasanHarian({
+          pendapatan: Number(saldoSetelahImport.data.daily_revenue ?? 0),
+          hpp: Number(saldoSetelahImport.data.daily_cogs ?? 0),
+          beban: Number(saldoSetelahImport.data.daily_expenses ?? 0),
+        });
+      }
       publishActiveInvoice(pending.data ? { invoice_no: pending.data.invoice_no as string, total: Number(pending.data.total) } : null);
     } else {
       setSesi(null);
