@@ -268,7 +268,7 @@ begin
     v_lines,
     (v_tx.created_at at time zone 'Asia/Jakarta')::date
   );
-end $;
+end $$;
 
 -- Bila transaksi dihapus dari riwayat atau dibatalkan, jurnal yang dibuat
 -- otomatis untuk transaksi tersebut ikut dihapus. Ini menjaga saldo kas/bank
@@ -278,14 +278,14 @@ returns trigger
 language plpgsql
 security definer
 set search_path=public,pg_temp
-as $
+as $$
 begin
   delete from public.journal_entries
   where user_id=old.user_id
     and source_type='transaction'
     and source_id=old.id::text;
   return old;
-end $;
+end $$;
 
 drop trigger if exists transactions_remove_accounting on public.transactions;
 create trigger transactions_remove_accounting
