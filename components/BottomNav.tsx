@@ -24,12 +24,12 @@ import { supabase } from '@/lib/supabase';
 export default function BottomNav() {
   const p = usePathname();
   const [showCatatModal, setShowCatatModal] = useState(false);
-  const [catatAwal, setCatatAwal] = useState<{ type: 'masuk' | 'keluar'; metode: 'tunai' | 'qris' }>({ type: 'masuk', metode: 'tunai' });
+  const [catatAwal, setCatatAwal] = useState<{ type: 'masuk' | 'keluar' | 'modal'; metode: 'tunai' | 'qris' }>({ type: 'masuk', metode: 'tunai' });
 
   // Halaman lain (mis. Aksi Cepat di beranda) membuka modal ini lewat event, supaya hanya ada satu modal.
   useEffect(() => {
     const buka = (e: Event) => {
-      const d = (e as CustomEvent<{ type?: 'masuk' | 'keluar'; metode?: 'tunai' | 'qris' }>).detail ?? {};
+      const d = (e as CustomEvent<{ type?: 'masuk' | 'keluar' | 'modal'; metode?: 'tunai' | 'qris' }>).detail ?? {};
       setCatatAwal({ type: d.type ?? 'masuk', metode: d.metode ?? 'tunai' });
       setShowCatatModal(true);
     };
