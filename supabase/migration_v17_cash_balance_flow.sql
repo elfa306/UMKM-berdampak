@@ -47,6 +47,9 @@ declare
   v_cash numeric(16,2) := 0;
   v_bank numeric(16,2) := 0;
   v_setup boolean := false;
+  v_daily_revenue numeric(16,2) := 0;
+  v_daily_cogs numeric(16,2) := 0;
+  v_daily_expenses numeric(16,2) := 0;
   v_date date := coalesce(p_before_date, (now() at time zone 'Asia/Jakarta')::date);
 begin
   if v_user is null then
@@ -65,13 +68,27 @@ begin
   join public.journal_entries je on je.id=jl.entry_id and je.user_id=jl.user_id
   where jl.user_id=v_user and je.entry_date < v_date;
 
+  -- p_before_date adalah tanggal eksklusif, sehingga ringkasan harian
+  -- mengacu pada hari kalender tepat sebelumnya.
+  select
+    coalesce(sum(jl.credit-jl.debit) filter (where jl.account_code in ('4000','4100')),0),
+    coalesce(sum(jl.debit-jl.credit) filter (where jl.account_code in ('5000','5100')),0),
+    coalesce(sum(jl.debit-jl.credit) filter (where jl.account_type='expense' and jl.account_code not in ('5000','5100')),0)
+  into v_daily_revenue,v_daily_cogs,v_daily_expenses
+  from public.journal_lines jl
+  join public.journal_entries je on je.id=jl.entry_id and je.user_id=jl.user_id
+  where jl.user_id=v_user and je.entry_date = v_date - 1;
+
   return jsonb_build_object(
     'setup_complete',v_setup,
     'cash_balance',v_cash,
     'bank_balance',v_bank,
+    'daily_revenue',v_daily_revenue,
+    'daily_cogs',v_daily_cogs,
+    'daily_expenses',v_daily_expenses,
     'before_date',v_date
   );
-end $$;
+end $;
 
 -- Rekonsiliasi saldo aktual pertama kali.
 -- Selisih dicatat ke akun 3900 (Saldo Awal/Penyesuaian), sehingga laporan lama
