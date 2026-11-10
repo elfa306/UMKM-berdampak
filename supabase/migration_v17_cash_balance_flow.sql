@@ -88,7 +88,7 @@ begin
     'daily_expenses',v_daily_expenses,
     'before_date',v_date
   );
-end $;
+end $$;
 
 -- Rekonsiliasi saldo aktual pertama kali.
 -- Selisih dicatat ke akun 3900 (Saldo Awal/Penyesuaian), sehingga laporan lama
