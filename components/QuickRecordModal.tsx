@@ -107,7 +107,7 @@ export default function QuickRecordModal({
       const sessionId = await ensureTodaySession(todayISO());
       if (!sessionId) {
         setLoading(false);
-        setErrMsg('Modal harian belum diisi. Kembali ke Beranda CAVA dan isi modal harian terlebih dahulu. Transaksi belum disimpan.');
+        setErrMsg('Sesi hari ini belum dibuka. Buka Beranda CAVA, konfirmasi saldo awal usaha, lalu mulai aktivitas harian. Transaksi belum disimpan.');
         return;
       }
 
@@ -252,7 +252,7 @@ export default function QuickRecordModal({
               </span>
               <div className="mt-1 flex items-baseline justify-center gap-1">
                 <span className={`text-3xl sm:text-4xl font-extrabold tabular-nums tracking-tight ${
-                  type === 'masuk' ? 'text-[#103A57]' : 'text-[#991B1B]'
+                  type === 'keluar' ? 'text-[#991B1B]' : type === 'modal' ? 'text-[#366B2B]' : 'text-[#103A57]'
                 }`}>
                   {rupiah(nominalNumber)}
                 </span>
@@ -363,7 +363,7 @@ export default function QuickRecordModal({
                 className={`relative w-full rounded-2xl py-3.5 px-4 font-extrabold text-sm text-white transition-all active:scale-[0.98] disabled:opacity-40 ${
                   type === 'masuk'
                     ? 'bg-[#103A57] hover:bg-[#103A57]/90'
-                    : 'bg-[#991B1B] hover:bg-[#991B1B]/90'
+                    : type === 'keluar' ? 'bg-[#991B1B] hover:bg-[#991B1B]/90' : 'bg-[#366B2B] hover:bg-[#366B2B]/90'
                 }`}
               >
                 {savedSuccess ? (
