@@ -1,6 +1,6 @@
 'use client';
 import { useCallback,useEffect,useMemo,useState,type FormEvent } from 'react';
-import { CheckCircle2,Edit3,Package,Plus,Search,Trash2,X } from 'lucide-react';
+import { CheckCircle2,Pencil,Package,Plus,Search,Trash2,X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import BottomNav from '@/components/BottomNav';
 import { rupiah } from '@/lib/accounting';
@@ -77,7 +77,7 @@ export default function InventoryManager(){
      <p className="mt-1 text-[10px] text-slate-400">Satuan: {p.satuan||'unit'}</p>
      <div className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-3"><div><p className="text-[10px] text-slate-400">Harga beli / HPP</p><p className="mt-1 text-sm font-bold text-slate-700">{rupiah(p.harga_pokok)}</p></div><div><p className="text-[10px] text-slate-400">Harga jual</p><p className="mt-1 text-sm font-black text-[#103A57]">{rupiah(p.harga)}</p></div></div>
      <div className={`mt-3 rounded-xl px-3 py-2.5 ${gap>=0?'bg-emerald-50 text-emerald-800':'bg-rose-50 text-rose-700'}`}><p className="text-[10px] font-semibold">Selisih harga per unit (estimasi)</p><p className="mt-0.5 text-sm font-black">{rupiah(gap)}</p></div>
-    </div><div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3"><button type="button" onClick={()=>openEdit(p)} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#307B8E]"><Edit3 size={14}/> Ubah</button><button type="button" onClick={()=>setDeleting(p)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600"><Trash2 size={14}/> Hapus</button></div>
+    </div><div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3"><button type="button" onClick={()=>openEdit(p)} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#307B8E]"><Pencil size={14}/> Ubah</button><button type="button" onClick={()=>setDeleting(p)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600"><Trash2 size={14}/> Hapus</button></div>
    </article>})}
   </div>:<div className="rounded-3xl border border-dashed border-slate-300 bg-white p-9 text-center"><Package size={34} className="mx-auto text-slate-300"/><h2 className="mt-3 text-sm font-black text-[#103A57]">{search?'Produk tidak ditemukan':'Belum ada produk di katalog'}</h2><p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-slate-500">{search?'Coba kata kunci lain.':'Tambahkan menu beserta harga beli dan harga jualnya.'}</p>{!search&&<button type="button" onClick={openCreate} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#103A57] px-4 py-2.5 text-xs font-bold text-white"><Plus size={14}/> Tambah Produk</button>}</div>}
   <BottomNav/>
