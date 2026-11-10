@@ -18,11 +18,11 @@ export const rupiah = (n: number) =>
 export const todayISO = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
 
 /**
- * Pemetaan "Dual-View":
- * - Modal harian  -> HPP (pembelian bahan baku hari itu)
- * - Transaksi 'penjualan' -> Pendapatan (tunai / QRIS)
- * - Transaksi 'biaya' -> Beban operasional
- * Posisi layar depan = labaBersih; dimulai dari -modal, impas saat 0.
+ * Ringkasan historis untuk tampilan berbasis transaksi.
+ * - Parameter modal hanya mewakili HPP legacy yang pernah disimpan pada modal_harian.
+ * - Sesi baru menyimpan modal_harian = 0; HPP aktualnya dibaca dari jurnal akuntansi.
+ * - Setoran modal dan saldo kas/bank tidak pernah dihitung sebagai pendapatan penjualan.
+ * - Transaksi 'biaya' tetap dihitung sebagai pengeluaran operasional pada ringkasan ini.
  */
 export function summarize(modal: number, txs: Tx[]) {
   const sum = (f: (t: Tx) => boolean) => txs.filter(f).reduce((a, t) => a + t.jumlah, 0);
