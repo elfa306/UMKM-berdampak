@@ -77,6 +77,7 @@ export default function Kasir() {
   const [ringkasanHarian, setRingkasanHarian] = useState<RingkasanKeuanganHarian>({ pendapatan: 0, hpp: 0, beban: 0 });
   const [saldoKasInput, setSaldoKasInput] = useState('0');
   const [saldoBankInput, setSaldoBankInput] = useState('0');
+  const saldoAwalInputDiubah = useRef(false);
 
   // New CAVA UI states
   const [sembunyikanNominal, setSembunyikanNominal] = useState(false);
@@ -165,7 +166,7 @@ export default function Kasir() {
       hpp: Number(saldoTerkini.data?.daily_cogs ?? 0),
       beban: Number(saldoTerkini.data?.daily_expenses ?? 0),
     });
-    if (!opening.data) {
+    if (!opening.data && !saldoAwalInputDiubah.current) {
       setSaldoKasInput(String(Math.max(0, Math.round(terkini.kas))));
       setSaldoBankInput(String(Math.max(0, Math.round(terkini.bank))));
     }
@@ -531,7 +532,7 @@ export default function Kasir() {
                     step="1"
                     inputMode="numeric"
                     value={saldoKasInput}
-                    onChange={(event) => setSaldoKasInput(event.target.value)}
+                    onChange={(event) => { saldoAwalInputDiubah.current = true; setSaldoKasInput(event.target.value); }}
                     className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-extrabold tabular-nums text-[#103A57] outline-none focus:border-[#307B8E] focus:bg-white"
                   />
                 </label>
@@ -545,7 +546,7 @@ export default function Kasir() {
                     step="1"
                     inputMode="numeric"
                     value={saldoBankInput}
-                    onChange={(event) => setSaldoBankInput(event.target.value)}
+                    onChange={(event) => { saldoAwalInputDiubah.current = true; setSaldoBankInput(event.target.value); }}
                     className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-extrabold tabular-nums text-[#103A57] outline-none focus:border-[#307B8E] focus:bg-white"
                   />
                 </label>
