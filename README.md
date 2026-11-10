@@ -6,9 +6,21 @@
 3. Supabase SQL Editor, jalankan berurutan: `schema.sql`, `migration_v2.sql`, `migration_v3.sql`, lalu `migration_v4.sql`
 4. `npm run dev` lalu buka http://localhost:3000
 
+## Saldo awal dan pembukaan hari (migration v17)
+
+Untuk database yang sudah menjalankan migrasi sebelumnya sampai `migration_v16_hapus_produk.sql`, jalankan file `supabase/migration_v17_cash_balance_flow.sql` melalui Supabase Dashboard → SQL Editor.
+
+Setelah migrasi diterapkan:
+- Saat pertama kali membuka Kasir, pemilik mengonfirmasi saldo kas tunai dan saldo bank/QRIS yang benar-benar tersedia. Langkah ini hanya satu kali per akun.
+- Pada hari berikutnya, saldo penutupan dari jurnal otomatis menjadi saldo pembuka. Form tidak lagi meminta modal harian setiap hari.
+- Tambahan uang dari pemilik dicatat lewat Catat Transaksi → Setor modal. Pencatatan ini masuk ke ekuitas, bukan pendapatan penjualan.
+- Pengeluaran dapat memilih sumber pembayaran Tunai atau Bank/QRIS agar saldo akun yang berkurang sesuai metode.
+
+Saldo berjalan dihitung dari jurnal transaksi. Karena itu, saldo yang dibawa ke hari berikutnya mengikuti transaksi yang tercatat di CAVA; cocokkan secara berkala dengan uang tunai dan mutasi rekening sebenarnya.
+
 ## Halaman
 - `/` Beranda (Bento Grid). Pengguna yang sudah login otomatis diarahkan ke `/kasir`
-- `/kasir` Kasir: target balik modal, QRIS real-time (pop-up + suara Ka-Ching), grafik 7 hari
+- `/kasir` Kasir: saldo kas dan bank/QRIS, laba harian berbasis jurnal, QRIS real-time, grafik 7 hari
 - `/riwayat` Mutasi per hari, unduh Excel harian/periode, cetak PDF untuk bank
 - `/statistik` Donut, tunai vs QRIS, grafik tren (Recharts), cetak PDF
 - `/kredit` Rapor usaha dan simulasi cicilan; profil usaha disimpan per akun, perhitungan memakai catatan kasir 30 hari terakhir
