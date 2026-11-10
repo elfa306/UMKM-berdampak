@@ -23,7 +23,7 @@ export const TRANSACTION_SAVED_EVENT = 'cava:transaction-saved';
 export const OPEN_CATAT_EVENT = 'cava:open-catat';
 
 /** Buka modal Catat Transaksi dari mana saja (modalnya dipasang di BottomNav). */
-export function bukaCatatTransaksi(opts: { type?: 'masuk' | 'keluar'; metode?: 'tunai' | 'qris' } = {}) {
+export function bukaCatatTransaksi(opts: { type?: 'masuk' | 'keluar' | 'modal'; metode?: 'tunai' | 'qris' } = {}) {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(OPEN_CATAT_EVENT, { detail: opts }));
 }
