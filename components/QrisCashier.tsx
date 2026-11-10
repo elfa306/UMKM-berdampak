@@ -90,11 +90,11 @@ export default function QrisCashier({
           .eq('aktif', true)
           .in('jenis_item', ['merchandise', 'finished_good', 'service'])
           .order('created_at'),
-        supabase.from('daily_sessions').select('id,modal_harian').eq('tanggal', tanggal).maybeSingle(),
+        supabase.from('daily_sessions').select('id,modal_harian').eq('user_id', user.id).eq('tanggal', tanggal).maybeSingle(),
       ]);
       if (!alive) return;
       setProducts((p.data ?? []).map((x) => ({ id: x.id as string, nama: x.nama as string, harga: Number(x.harga) })));
-      if (s.data?.id && Number(s.data.modal_harian) > 0) {
+      if (s.data?.id) {
         const saved = await supabase
           .from('qris_invoice_drafts')
           .select('id,invoice_no,total,items,status,paid_at')
@@ -181,7 +181,7 @@ export default function QrisCashier({
     }
 
     const sessionId = await ensureTodaySession(tanggal);
-    if (!sessionId) return flash('err', 'Modal harian belum diisi. Buka Beranda CAVA dan isi modal harian terlebih dahulu.');
+    if (!sessionId) return flash('err', 'Sesi hari ini belum dibuka. Buka Beranda CAVA, konfirmasi saldo awal usaha, lalu mulai aktivitas harian.');
     const { data, error } = await supabase
       .from('qris_invoice_drafts')
       .insert({ session_id: sessionId, invoice_no: invoiceNo, total: cartTotal, items, status: 'pending' })
@@ -278,7 +278,7 @@ export default function QrisCashier({
     if (!sessionId) {
       setBusy(false);
       setConfirmType(null);
-      return flash('err', 'Modal harian belum diisi. Isi modal harian di Beranda CAVA terlebih dahulu. Tidak ada transaksi yang dicatat.');
+      return flash('err', 'Sesi hari ini belum dibuka. Konfirmasi saldo awal dan mulai aktivitas harian di Beranda CAVA terlebih dahulu. Tidak ada transaksi yang dicatat.');
     }
     const { data, error } = await supabase.rpc('confirm_qris_payment_simulation', {
       p_session_id: sessionId,
