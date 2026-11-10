@@ -40,6 +40,7 @@ import { announceInvoiceMatch, getActiveInvoice, publishActiveInvoice } from '@/
 import { CavaVMark, CavaLogo } from '@/components/CavaLogo';
 
 type Sesi = { id: string; modal_harian: number };
+type SaldoUsaha = { kas: number; bank: number };
 const keTx = (r: TxBaris | Tx): Tx => ({ ...(r as Tx), jumlah: Number(r.jumlah) });
 
 // Determine greeting based on Jakarta local hour
@@ -69,6 +70,11 @@ export default function Kasir() {
   const [menghapus, setMenghapus] = useState(false);
   const [suara, setSuara] = useState(true);
   const [menyimpanModal, setMenyimpanModal] = useState(false);
+  const [saldoAwalTersimpan, setSaldoAwalTersimpan] = useState<boolean | null>(null);
+  const [saldoAwal, setSaldoAwal] = useState<SaldoUsaha>({ kas: 0, bank: 0 });
+  const [saldoSaatIni, setSaldoSaatIni] = useState<SaldoUsaha>({ kas: 0, bank: 0 });
+  const [saldoKasInput, setSaldoKasInput] = useState('0');
+  const [saldoBankInput, setSaldoBankInput] = useState('0');
 
   // New CAVA UI states
   const [sembunyikanNominal, setSembunyikanNominal] = useState(false);
@@ -77,7 +83,7 @@ export default function Kasir() {
 
   const sudahDiproses = useRef<Set<string>>(new Set());
   const sesiRef = useRef<Sesi | null>(null);
-  sesiRef.current = sesi && sesi.modal_harian > 0 ? sesi : null;
+  sesiRef.current = sesi;
 
   const info = (t: string) => { setToast(t); setTimeout(() => setToast(''), 2500); };
 
@@ -97,6 +103,9 @@ export default function Kasir() {
       setUserId('guest');
       setSesi(null);
       setTxs([]);
+      setSaldoAwalTersimpan(true);
+      setSaldoAwal({ kas: 0, bank: 0 });
+      setSaldoSaatIni({ kas: 0, bank: 0 });
       setNamaUsaha('Mode Tamu');
       setProducts([
         { id: 'sample-1', nama: 'Kopi Cava Latte', harga: 18000, stok: 15, satuan: 'cup', aktif: true, jenis_item: 'finished_good' } as any,
@@ -109,16 +118,44 @@ export default function Kasir() {
     }
 
     setUserId(user.id);
-    const [p, s, profil] = await Promise.all([
-      supabase.from('products').select('id,nama,harga,stok,stok_minimum,satuan').eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
+    const tanggalBesok = new Date(`${tanggal}T12:00:00`);
+    tanggalBesok.setDate(tanggalBesok.getDate() + 1);
+    const tanggalBesokISO = tanggalBesok.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+    const [p, s, profil, opening, saldoPembuka, saldoTerkini] = await Promise.all([
+      supabase.from('products').select('id,nama,harga,stok,stok_minimum,satuan').eq('user_id', user.id).eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
       supabase.from('daily_sessions').select('id,modal_harian').eq('user_id', user.id).eq('tanggal', tanggal).maybeSingle(),
       supabase.from('business_profiles').select('nama_usaha').eq('user_id', user.id).maybeSingle(),
+      supabase.from('business_opening_balances').select('user_id').eq('user_id', user.id).maybeSingle(),
+      supabase.rpc('get_business_cash_balances', { p_before_date: tanggal }),
+      supabase.rpc('get_business_cash_balances', { p_before_date: tanggalBesokISO }),
     ]);
 
     if (s.error) {
       setErr('Sesi harian gagal diperiksa. Periksa koneksi dan izin database, lalu muat ulang.');
       setReady(true);
       return;
+    }
+    if (opening.error || saldoPembuka.error || saldoTerkini.error) {
+      console.error('Gagal memuat saldo usaha:', opening.error?.message, saldoPembuka.error?.message, saldoTerkini.error?.message);
+      setErr('Fitur saldo awal belum tersedia. Jalankan migration_v17_cash_balance_flow.sql di Supabase, lalu muat ulang CAVA.');
+      setReady(true);
+      return;
+    }
+
+    const awal = {
+      kas: Number(saldoPembuka.data?.cash_balance ?? 0),
+      bank: Number(saldoPembuka.data?.bank_balance ?? 0),
+    };
+    const terkini = {
+      kas: Number(saldoTerkini.data?.cash_balance ?? 0),
+      bank: Number(saldoTerkini.data?.bank_balance ?? 0),
+    };
+    setSaldoAwalTersimpan(Boolean(opening.data));
+    setSaldoAwal(awal);
+    setSaldoSaatIni(terkini);
+    if (!opening.data) {
+      setSaldoKasInput(String(Math.max(0, Math.round(terkini.kas))));
+      setSaldoBankInput(String(Math.max(0, Math.round(terkini.bank))));
     }
 
     // Nama usaha bersumber dari profil akun yang sedang login.
@@ -133,23 +170,18 @@ export default function Kasir() {
       const sesiHariIni = { id: s.data.id, modal_harian: Number(s.data.modal_harian) };
       setSesi(sesiHariIni);
 
-      // Sesi yang dibuat otomatis dengan modal Rp0 dianggap belum dimulai.
-      // Form awal akan memperbarui baris ini sehingga transaksi lama tidak hilang.
-      if (sesiHariIni.modal_harian > 0) {
-        await importQris(s.data.id);
-        const [t, pending] = await Promise.all([
-          supabase.from('transactions').select('*').eq('session_id', s.data.id).order('created_at'),
-          supabase.from('qris_invoice_drafts').select('invoice_no,total').eq('session_id', s.data.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-        ]);
-        if (t.error) {
-          setErr('Transaksi hari ini gagal dimuat. Muat ulang halaman untuk mencoba lagi.');
-        }
-        setTxs((t.data ?? []).map((x) => ({ ...x, jumlah: Number(x.jumlah) })) as Tx[]);
-        publishActiveInvoice(pending.data ? { invoice_no: pending.data.invoice_no as string, total: Number(pending.data.total) } : null);
-      } else {
-        setTxs([]);
-        publishActiveInvoice(null);
+      // Modal_harian dipertahankan hanya untuk kompatibilitas catatan lama.
+      // Sesi baru bernilai Rp0 karena saldo awal dihitung dari jurnal kas dan bank.
+      await importQris(s.data.id);
+      const [t, pending] = await Promise.all([
+        supabase.from('transactions').select('*').eq('user_id', user.id).eq('session_id', s.data.id).order('created_at'),
+        supabase.from('qris_invoice_drafts').select('invoice_no,total').eq('session_id', s.data.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      ]);
+      if (t.error) {
+        setErr('Transaksi hari ini gagal dimuat. Muat ulang halaman untuk mencoba lagi.');
       }
+      setTxs((t.data ?? []).map((x) => ({ ...x, jumlah: Number(x.jumlah) })) as Tx[]);
+      publishActiveInvoice(pending.data ? { invoice_no: pending.data.invoice_no as string, total: Number(pending.data.total) } : null);
     } else {
       setSesi(null);
       setTxs([]);
@@ -229,12 +261,6 @@ export default function Kasir() {
     e.preventDefault();
     if (menyimpanModal) return;
 
-    const modal = angka(new FormData(e.currentTarget).get('modal'));
-    if (!Number.isSafeInteger(modal) || modal <= 0) {
-      setErr('Masukkan modal harian lebih dari Rp0 agar sesi dapat dimulai.');
-      return;
-    }
-
     setMenyimpanModal(true);
     setErr('');
     try {
@@ -242,72 +268,76 @@ export default function Kasir() {
       const user = authData.user;
       if (authError || !user) throw new Error('Sesi login tidak ditemukan. Silakan masuk kembali.');
 
-      let tersimpan: { id: string; modal_harian: number | string } | null = null;
+      if (saldoAwalTersimpan !== true) {
+        const form = new FormData(e.currentTarget);
+        const kas = angka(form.get('saldoKas'));
+        const bank = angka(form.get('saldoBank'));
+        if (!Number.isSafeInteger(kas) || !Number.isSafeInteger(bank) || kas < 0 || bank < 0) {
+          throw new Error('Masukkan saldo kas dan bank/QRIS yang valid. Nilai Rp0 diperbolehkan.');
+        }
 
-      if (sesi?.id) {
-        // Perbarui sesi lama yang telanjur dibuat otomatis dengan modal Rp0.
+        const { error: openingError } = await supabase.rpc('set_business_opening_balances', {
+          p_cash_amount: kas,
+          p_bank_amount: bank,
+        });
+        if (openingError) {
+          if (openingError.message.includes('opening_balance_already_set')) {
+            throw new Error('Saldo awal usaha sudah pernah dikonfirmasi. Muat ulang halaman untuk melanjutkan.');
+          }
+          throw new Error(`Saldo awal gagal disimpan: ${openingError.message}`);
+        }
+        setSaldoAwalTersimpan(true);
+      }
+
+      let sesiBaru: { id: string; modal_harian: number | string } | null = sesi
+        ? { id: sesi.id, modal_harian: sesi.modal_harian }
+        : null;
+
+      if (!sesiBaru) {
         const { data, error } = await supabase
           .from('daily_sessions')
-          .update({ modal_harian: modal })
-          .eq('id', sesi.id)
-          .eq('user_id', user.id)
-          .select('id,modal_harian')
-          .single();
-        if (error || !data) throw error ?? new Error('Modal harian gagal disimpan.');
-        tersimpan = data;
-      } else {
-        const { data, error } = await supabase
-          .from('daily_sessions')
-          .insert({ user_id: user.id, tanggal, modal_harian: modal })
+          .insert({ user_id: user.id, tanggal, modal_harian: 0 })
           .select('id,modal_harian')
           .single();
 
         if (error?.code === '23505') {
-          // Tangani bila sesi dibuat oleh tab/perangkat lain pada saat bersamaan.
           const { data: existing, error: lookupError } = await supabase
             .from('daily_sessions')
-            .select('id')
+            .select('id,modal_harian')
             .eq('user_id', user.id)
             .eq('tanggal', tanggal)
             .maybeSingle();
           if (lookupError || !existing) throw error;
-          const { data: updated, error: updateError } = await supabase
-            .from('daily_sessions')
-            .update({ modal_harian: modal })
-            .eq('id', existing.id)
-            .eq('user_id', user.id)
-            .select('id,modal_harian')
-            .single();
-          if (updateError || !updated) throw updateError ?? new Error('Modal harian gagal disimpan.');
-          tersimpan = updated;
+          sesiBaru = existing;
         } else {
-          if (error || !data) throw error ?? new Error('Modal harian gagal disimpan.');
-          tersimpan = data;
+          if (error || !data) throw error ?? new Error('Sesi harian gagal dibuka.');
+          sesiBaru = data;
         }
       }
 
-      if (!tersimpan) throw new Error('Modal harian gagal disimpan.');
-      setSesi({ id: tersimpan.id, modal_harian: Number(tersimpan.modal_harian) });
+      if (!sesiBaru) throw new Error('Sesi harian gagal dibuka.');
+      setSesi({ id: sesiBaru.id, modal_harian: Number(sesiBaru.modal_harian) });
       await load();
     } catch (error) {
-      setErr(error instanceof Error ? error.message : 'Modal harian gagal disimpan. Coba lagi.');
+      setErr(error instanceof Error ? error.message : 'Gagal membuka aktivitas harian. Coba lagi.');
     } finally {
       setMenyimpanModal(false);
     }
   }
 
   async function catat(row: { jenis: 'penjualan' | 'biaya'; keterangan: string; jumlah: number; metode: 'tunai' | 'qris' | null }, productId?: string) {
-    let sesiAktif = sesi && sesi.modal_harian > 0 ? sesi : null;
+    let sesiAktif = sesi;
     if (!sesiAktif && userId && userId !== 'guest') {
       const id = await ensureTodaySession(tanggal);
-      if (!id) return setErr('Isi modal harian terlebih dahulu sebelum mencatat transaksi.');
+      if (!id) return setErr('Buka aktivitas harian dari Beranda setelah saldo awal usaha dikonfirmasi.');
       const { data: sesiTersimpan, error: sesiError } = await supabase
         .from('daily_sessions')
         .select('id,modal_harian')
         .eq('id', id)
+        .eq('user_id', userId)
         .single();
-      if (sesiError || !sesiTersimpan || Number(sesiTersimpan.modal_harian) <= 0) {
-        return setErr('Sesi harian belum dikonfirmasi. Isi modal harian terlebih dahulu.');
+      if (sesiError || !sesiTersimpan) {
+        return setErr('Sesi harian belum dibuka. Mulai aktivitas dari Beranda terlebih dahulu.');
       }
       sesiAktif = { id: sesiTersimpan.id, modal_harian: Number(sesiTersimpan.modal_harian) };
       setSesi(sesiAktif);
@@ -388,12 +418,7 @@ export default function Kasir() {
   const untungBersih = liveSummary.labaBersih;
   const totalMasuk = liveSummary.pendapatan;
   const totalKeluar = liveSummary.beban;
-  const sisaModal = modalHarian > 0
-    ? Math.max(0, modalHarian - (totalMasuk - totalKeluar))
-    : 0;
-  const persenBalik = modalHarian > 0
-    ? Math.min(100, Math.max(0, Math.round(((modalHarian - sisaModal) / modalHarian) * 100)))
-    : 0;
+  const saldoUsahaSekarang = saldoSaatIni.kas + saldoSaatIni.bank;
 
   // Progres misi dihitung dari transaksi yang benar-benar tercatat hari ini.
   const missionProgress = Math.min(3, txs.length);
@@ -419,7 +444,8 @@ export default function Kasir() {
     );
   }
 
-  if (userId && userId !== 'guest' && (!sesi || sesi.modal_harian <= 0)) {
+  if (userId && userId !== 'guest' && (saldoAwalTersimpan !== true || !sesi)) {
+    const perluSaldoAwal = saldoAwalTersimpan !== true;
     return (
       <main className="min-h-[100svh] bg-[#F2F6F3] px-4 py-8 text-[#103A57] sm:px-6">
         <div className="mx-auto flex min-h-[calc(100svh-4rem)] w-full max-w-md flex-col justify-center">
@@ -428,34 +454,65 @@ export default function Kasir() {
           </div>
           <form onSubmit={mulaiHari} className="rounded-[28px] border border-[#103A57]/10 bg-white p-6 shadow-[0_18px_55px_-28px_rgba(16,58,87,0.35)] sm:p-7">
             <div className="mb-5">
-              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-[#307B8E]">Aktivitas harian</p>
-              <h1 className="mt-2 text-2xl font-black tracking-tight">Mulai hari dengan CAVA</h1>
+              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-[#307B8E]">
+                {perluSaldoAwal ? 'Pengaturan awal usaha' : 'Aktivitas harian'}
+              </p>
+              <h1 className="mt-2 text-2xl font-black tracking-tight">
+                {perluSaldoAwal ? 'Siapkan saldo awal usaha' : 'Mulai hari dengan CAVA'}
+              </h1>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                Masukkan modal operasional hari ini terlebih dahulu. Form ini hanya muncul sekali untuk setiap tanggal.
+                {perluSaldoAwal
+                  ? 'Masukkan saldo uang yang benar-benar tersedia saat ini. Pengaturan ini hanya dilakukan satu kali; saldo akan dicocokkan dengan pembukuan tanpa menghapus riwayat transaksi.'
+                  : 'Saldo awal hari ini otomatis dibawa dari penutupan hari sebelumnya. Tidak perlu menyetor modal baru untuk mulai berjualan.'}
               </p>
             </div>
 
-            {sesi?.id && (
-              <div className="mb-4 rounded-2xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">
-                Sesi hari ini sebelumnya sudah terbentuk dengan modal Rp0. Masukkan modal yang benar untuk melanjutkan. Catatan transaksi yang sudah ada tetap dipertahankan.
+            {perluSaldoAwal ? (
+              <div className="space-y-4">
+                <label className="block">
+                  <span className="block text-sm font-bold text-[#103A57]">Saldo kas tunai</span>
+                  <span className="mt-1 block text-[11px] text-slate-500">Uang tunai yang tersedia di laci/kas usaha.</span>
+                  <input
+                    name="saldoKas"
+                    type="number"
+                    min="0"
+                    step="1"
+                    inputMode="numeric"
+                    value={saldoKasInput}
+                    onChange={(event) => setSaldoKasInput(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-extrabold tabular-nums text-[#103A57] outline-none focus:border-[#307B8E] focus:bg-white"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-sm font-bold text-[#103A57]">Saldo bank / QRIS</span>
+                  <span className="mt-1 block text-[11px] text-slate-500">Saldo usaha yang tersimpan di rekening atau dompet merchant.</span>
+                  <input
+                    name="saldoBank"
+                    type="number"
+                    min="0"
+                    step="1"
+                    inputMode="numeric"
+                    value={saldoBankInput}
+                    onChange={(event) => setSaldoBankInput(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-extrabold tabular-nums text-[#103A57] outline-none focus:border-[#307B8E] focus:bg-white"
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-2xl bg-[#EEF5F1] p-4">
+                  <span className="text-[11px] font-bold text-[#4F6B7C]">Kas tunai</span>
+                  <p className="mt-1 text-lg font-black tabular-nums text-[#103A57]">{rupiah(saldoAwal.kas)}</p>
+                </div>
+                <div className="rounded-2xl bg-[#EEF5F1] p-4">
+                  <span className="text-[11px] font-bold text-[#4F6B7C]">Bank / QRIS</span>
+                  <p className="mt-1 text-lg font-black tabular-nums text-[#103A57]">{rupiah(saldoAwal.bank)}</p>
+                </div>
+                <p className="col-span-2 text-[11px] leading-5 text-slate-500">
+                  Saldo ini bukan setoran modal baru. Bila ada tambahan uang dari pemilik, catat terpisah melalui Catat Transaksi → Setor modal.
+                </p>
               </div>
             )}
-
-            <label htmlFor="modal-harian" className="block text-sm font-bold text-[#103A57]">Modal harian</label>
-            <input
-              id="modal-harian"
-              name="modal"
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              required
-              placeholder="Contoh: Rp 500.000"
-              onInput={(event) => {
-                const digits = event.currentTarget.value.replace(/\D/g, '');
-                event.currentTarget.value = digits ? `Rp ${Number(digits).toLocaleString('id-ID')}` : '';
-              }}
-              className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-2xl font-extrabold tabular-nums text-[#103A57] outline-none transition focus:border-[#307B8E] focus:bg-white focus:ring-4 focus:ring-[#307B8E]/10"
-            />
 
             {err && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-semibold leading-5 text-red-700">{err}</p>}
 
@@ -464,10 +521,12 @@ export default function Kasir() {
               disabled={menyimpanModal}
               className="mt-5 flex min-h-12 w-full items-center justify-center rounded-2xl bg-[#103A57] px-4 py-3 text-sm font-extrabold text-white transition hover:bg-[#205874] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {menyimpanModal ? 'Menyimpan modal…' : 'Simpan dan mulai aktivitas'}
+              {menyimpanModal
+                ? 'Menyimpan…'
+                : perluSaldoAwal ? 'Simpan saldo awal & mulai' : 'Mulai aktivitas hari ini'}
             </button>
             <p className="mt-4 text-center text-[11px] leading-5 text-slate-400">
-              Saat membuka CAVA kembali pada hari yang sama, kamu akan langsung masuk ke dashboard.
+              Setelah sesi hari ini dibuka, CAVA akan langsung membawa kamu ke dashboard tanpa meminta modal lagi.
             </p>
           </form>
         </div>
@@ -531,20 +590,19 @@ export default function Kasir() {
             </span>
           </div>
 
-          <div className="mt-3">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-[#DCEAE3]">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${persenBalik}%` }}
-                transition={{ duration: 0.9, ease: 'easeOut' }}
-                className="h-full rounded-full bg-[#307B8E]"
-              />
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="rounded-xl bg-[#EEF5F1] px-3 py-2.5">
+              <span className="text-[10px] font-bold text-[#4F6B7C]">Saldo kas tunai</span>
+              <p className="mt-0.5 text-sm font-extrabold tabular-nums text-[#103A57]">
+                {sembunyikanNominal ? 'Rp •••' : rupiah(saldoSaatIni.kas)}
+              </p>
             </div>
-            <p className="mt-2 text-xs font-semibold text-[#4F6B7C]">
-              {modalHarian > 0
-                ? `${persenBalik}% balik modal · kurang ${rupiah(sisaModal)}`
-                : 'Isi modal harian untuk mulai menghitung progres balik modal.'}
-            </p>
+            <div className="rounded-xl bg-[#EEF5F1] px-3 py-2.5">
+              <span className="text-[10px] font-bold text-[#4F6B7C]">Saldo bank / QRIS</span>
+              <p className="mt-0.5 text-sm font-extrabold tabular-nums text-[#103A57]">
+                {sembunyikanNominal ? 'Rp •••' : rupiah(saldoSaatIni.bank)}
+              </p>
+            </div>
           </div>
 
           <div className="stat3">
@@ -558,7 +616,7 @@ export default function Kasir() {
             </div>
             <div>
               <b className="tabular-nums">{sembunyikanNominal ? 'Rp •••' : rupiah(modalHarian)}</b>
-              <span>Modal</span>
+              <span>Saldo usaha</span>
             </div>
           </div>
         </section>
@@ -669,10 +727,10 @@ export default function Kasir() {
               </span>
               <div className="min-w-0 flex-1">
                 <h3 className="text-xs font-black text-[#103A57]">
-                  {modalHarian > 0 ? `Balik modal tinggal ${rupiah(sisaModal)}` : 'Sesi harian belum dimulai'}
+                  Saldo usaha {rupiah(saldoUsahaSekarang)}
                 </h3>
                 <p className="mt-0.5 text-[11px] font-semibold text-[#307B8E]">
-                  {modalHarian > 0 ? 'Pantau perubahan berdasarkan transaksi hari ini.' : 'Mulai sesi harian untuk menetapkan modal usaha.'}
+                  Kas tunai dan bank/QRIS dihitung terpisah. Tambahan dana pemilik dicatat sebagai setoran modal.
                 </p>
               </div>
             </div>
