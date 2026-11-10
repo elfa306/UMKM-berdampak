@@ -25,8 +25,8 @@ const menus = [
   {
     href: '/inventaris',
     icon: Boxes,
-    title: 'Manajemen Inventaris & Stok',
-    desc: 'Katalog barang dagangan, bahan baku, dan riwayat mutasi persediaan',
+    title: 'Katalog Produk',
+    desc: 'Daftar produk/menu beserta harga beli dan harga jual',
   },
   {
     href: '/integrasi',

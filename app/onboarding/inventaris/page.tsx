@@ -1,8 +1,8 @@
 import OnboardingInventory from '@/components/OnboardingInventory';
 
 export const metadata = {
-  title: 'Isi Inventaris | UMKM Berdampak',
-  description: 'Langkah terakhir pengaturan usaha: masukkan produk dan jumlah stok awal.',
+  title: 'Katalog Produk Awal | CAVA',
+  description: 'Daftarkan produk yang dijual beserta harga beli dan harga jual.',
 };
 
 export default function OnboardingInventarisPage() {

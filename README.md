@@ -18,6 +18,15 @@ Setelah migrasi diterapkan:
 
 Saldo berjalan dihitung dari jurnal transaksi. Karena itu, saldo yang dibawa ke hari berikutnya mengikuti transaksi yang tercatat di CAVA; cocokkan secara berkala dengan uang tunai dan mutasi rekening sebenarnya.
 
+## Katalog produk tanpa pengelolaan stok (migration v18)
+
+Untuk database yang sudah menjalankan migration v17, jalankan `supabase/migration_v18_katalog_produk_tanpa_stok.sql` melalui Supabase Dashboard → SQL Editor.
+
+- Inventaris menjadi katalog produk/menu: nama, kategori, satuan, harga beli/HPP referensi, dan harga jual.
+- Produk dagangan, produk sendiri, dan jasa tidak lagi melacak atau membatasi jumlah stok pada kasir.
+- Harga beli pada katalog menjadi acuan biaya dan estimasi selisih harga; pembelian yang benar-benar dibayar tetap dicatat sebagai pengeluaran. Harga katalog tidak otomatis diposting sebagai jurnal HPP.
+- Pelacakan stok produk jual dinonaktifkan tanpa menghapus riwayat transaksi, pembelian, mutasi, atau batch produksi yang sudah tersimpan.
+
 ## Halaman
 - `/` Beranda (Bento Grid). Pengguna yang sudah login otomatis diarahkan ke `/kasir`
 - `/kasir` Kasir: saldo kas dan bank/QRIS, laba harian berbasis jurnal, QRIS real-time, grafik 7 hari

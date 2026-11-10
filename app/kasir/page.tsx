@@ -112,9 +112,8 @@ export default function Kasir() {
       setRingkasanHarian({ pendapatan: 0, hpp: 0, beban: 0 });
       setNamaUsaha('Mode Tamu');
       setProducts([
-        { id: 'sample-1', nama: 'Kopi Cava Latte', harga: 18000, stok: 15, satuan: 'cup', aktif: true, jenis_item: 'finished_good' } as any,
-        { id: 'sample-2', nama: 'Roti Bakar Kaya', harga: 15000, stok: 20, satuan: 'porsi', aktif: true, jenis_item: 'finished_good' } as any,
-        { id: 'sample-3', nama: 'Gula Pasir Kristal', harga: 17500, stok: 2, stok_minimum: 5, satuan: 'kg', aktif: true, jenis_item: 'merchandise' } as any,
+        { id: 'sample-1', nama: 'Kopi Cava Latte', harga: 18000 } as Product,
+        { id: 'sample-2', nama: 'Roti Bakar Kaya', harga: 15000 } as Product,
       ]);
       publishActiveInvoice(null);
       setReady(true);
@@ -126,7 +125,7 @@ export default function Kasir() {
     tanggalBesok.setDate(tanggalBesok.getDate() + 1);
     const tanggalBesokISO = tanggalBesok.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
     const [p, s, profil, opening, saldoPembuka, saldoTerkini] = await Promise.all([
-      supabase.from('products').select('id,nama,harga,stok,stok_minimum,satuan').eq('user_id', user.id).eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
+      supabase.from('products').select('id,nama,harga').eq('user_id', user.id).eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
       supabase.from('daily_sessions').select('id,modal_harian').eq('user_id', user.id).eq('tanggal', tanggal).maybeSingle(),
       supabase.from('business_profiles').select('nama_usaha').eq('user_id', user.id).maybeSingle(),
       supabase.from('business_opening_balances').select('user_id,recorded_at').eq('user_id', user.id).maybeSingle(),
@@ -414,7 +413,7 @@ export default function Kasir() {
         p_idempotency_key: crypto.randomUUID(),
       });
       if (error) {
-        if (error.message.includes('insufficient_stock')) return setErr('Stok produk tidak mencukupi.');
+        if (error.message.includes('insufficient_stock')) return setErr('Penjualan gagal diproses. Muat ulang katalog dan coba lagi.');
         return setErr(error.message);
       }
       const transaction = data?.transaction;
@@ -447,7 +446,7 @@ export default function Kasir() {
       const ids = Array.isArray(data?.transaction_ids) ? data.transaction_ids as string[] : [last.id];
       setTxs((current) => current.filter((tx) => !ids.includes(tx.id)));
       await refreshSaldo();
-      info(`✅ Pembayaran QRIS simulasi dibatalkan. ${Number(data?.cancelled_count ?? ids.length)} transaksi dibatalkan dan stok dikembalikan.`);
+      info(`✅ Pembayaran QRIS simulasi dibatalkan. ${Number(data?.cancelled_count ?? ids.length)} transaksi dihapus dari catatan.`);
       return;
     }
     if (last.product_id && last.payment_source === 'cashier') {
@@ -455,7 +454,7 @@ export default function Kasir() {
       if (error) return setErr(error.message);
       setTxs((t) => t.filter((x) => x.id !== last.id));
       await refreshSaldo();
-      info('✅ Transaksi dibatalkan dan stok dikembalikan.');
+      info('✅ Transaksi dibatalkan.');
       return;
     }
     const { error } = await supabase.from('transactions').delete().eq('id', last.id);
@@ -476,9 +475,6 @@ export default function Kasir() {
 
   // Progres misi dihitung dari transaksi yang benar-benar tercatat hari ini.
   const missionProgress = Math.min(3, txs.length);
-
-  // Check low stock
-  const lowStockItem = products.find((p) => typeof (p as any).stok === 'number' && (p as any).stok <= ((p as any).stok_minimum || 5));
 
   function gantiSuara() {
     const on = !suara;
@@ -731,12 +727,12 @@ export default function Kasir() {
               <span className="text-[11px] font-bold text-[#103A57]">QRIS</span>
             </button>
 
-            {/* 4. Stok */}
+            {/* 4. Katalog Produk */}
             <Link href="/inventaris" className="flex flex-col items-center gap-1.5 group">
               <span className="ico-tile group-active:scale-95 transition">
-                <Package size={19} strokeWidth={2.2} />
+                <ShoppingBag size={19} strokeWidth={2.2} />
               </span>
-              <span className="text-[11px] font-bold text-[#103A57]">Stok</span>
+              <span className="text-[11px] font-bold text-[#103A57]">Produk</span>
             </Link>
 
             {/* 5. Harga */}
@@ -757,21 +753,17 @@ export default function Kasir() {
           <section className="card space-y-3 h-full">
             <h2 className="card-title">Pengingat Usaha</h2>
 
-            {/* Alert 1: Low stock alert */}
+            {/* Alert 1: katalog produk */}
             <div className="flex items-start gap-3 rounded-2xl bg-[#EEF5F1] p-3.5">
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-100 text-amber-800">
-                <AlertTriangle size={18} />
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#A9D3C5] text-[#103A57]">
+                <ShoppingBag size={18} />
               </span>
               <div className="min-w-0 flex-1">
                 <h3 className="text-xs font-black text-[#103A57]">
-                  {lowStockItem
-                    ? `Stok ${lowStockItem.nama} tinggal ${(lowStockItem as any).stok} ${(lowStockItem as any).satuan || 'item'}`
-                    : products.length > 0 ? 'Tidak ada stok kritis' : 'Data stok belum tersedia'}
+                  {products.length > 0 ? `${products.length} produk siap dicatat` : 'Katalog produk masih kosong'}
                 </h3>
                 <p className="mt-0.5 text-[11px] font-semibold text-[#307B8E]">
-                  {lowStockItem
-                    ? 'Periksa persediaan dan rencanakan pengisian ulang.'
-                    : products.length > 0 ? 'Persediaan berada di atas batas minimum.' : 'Tambahkan produk melalui menu Inventaris.'}
+                  {products.length > 0 ? 'Pilih produk saat mencatat penjualan. Harga beli dan harga jual tersimpan di katalog.' : 'Tambahkan menu beserta harga beli dan harga jual melalui Katalog Produk.'}
                 </p>
               </div>
             </div>
