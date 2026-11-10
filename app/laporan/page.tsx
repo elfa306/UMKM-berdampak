@@ -171,10 +171,21 @@ export default function Laporan() {
   }
 
   async function hapus(id: string) {
-    if (!confirm('Hapus transaksi ini? Laba hari tersebut akan dihitung ulang.')) return;
-    const { error } = await supabase.from('transactions').delete().eq('id', id);
-    if (error) return setErr(error.message);
-    load();
+    if (!confirm('Hapus transaksi ini? Saldo, jurnal, dan laporan akan diperbarui.')) return;
+    setErr('');
+    const target = hari.flatMap((item) => item.txs).find((tx) => tx.id === id);
+
+    if (target?.payment_source === 'qris_simulation') {
+      const { error } = await supabase.rpc('cancel_qris_payment_simulation', { p_transaction_id: id });
+      if (error) return setErr(`Pembatalan QRIS simulasi gagal: ${error.message}`);
+    } else if (target?.product_id && target.payment_source === 'cashier') {
+      const { error } = await supabase.rpc('cancel_inventory_sale', { p_transaction_id: id });
+      if (error) return setErr(`Pembatalan penjualan stok gagal: ${error.message}`);
+    } else {
+      const { error } = await supabase.from('transactions').delete().eq('id', id);
+      if (error) return setErr(error.message);
+    }
+    await load();
   }
 
   const cetakPdf = () =>
