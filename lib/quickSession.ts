@@ -42,22 +42,18 @@ export const SAMPLE_PRODUCTS = [
 
 /** Ambil sesi harian untuk tanggal ini; dibuat (modal 0) bila belum ada. */
 export async function ensureTodaySession(tanggal: string): Promise<string | null> {
-  const { data: existing } = await supabase
+  // Sesi hanya boleh dipakai untuk pencatatan setelah modal harian diisi.
+  // Jangan membuat sesi Rp0 secara otomatis karena akan melewati form awal hari.
+  const { data: existing, error } = await supabase
     .from('daily_sessions')
-    .select('id')
+    .select('id,modal_harian')
     .eq('tanggal', tanggal)
     .maybeSingle();
-  if (existing?.id) return existing.id as string;
 
-  const { data: created, error } = await supabase
-    .from('daily_sessions')
-    .insert({ tanggal, modal_harian: 0 })
-    .select('id')
-    .single();
-  if (error || !created) {
-    // Bisa saja sesi baru dibuat dari perangkat lain di saat yang sama.
-    const { data: again } = await supabase.from('daily_sessions').select('id').eq('tanggal', tanggal).maybeSingle();
-    return (again?.id as string | undefined) ?? null;
+  if (error) {
+    console.error('Gagal memeriksa sesi harian:', error.message);
+    return null;
   }
-  return created.id as string;
+  if (existing?.id && Number(existing.modal_harian) > 0) return existing.id as string;
+  return null;
 }
