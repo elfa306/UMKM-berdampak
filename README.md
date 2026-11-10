@@ -3,7 +3,7 @@
 ## Pasang
 1. `npm install`
 2. Salin `.env.local.example` menjadi `.env.local`, isi nilainya (tidak ada variabel baru di versi ini)
-3. Supabase SQL Editor, jalankan berurutan: `schema.sql`, `migration_v2.sql`, `migration_v3.sql`, lalu `migration_v4.sql`
+3. Supabase SQL Editor: untuk database baru, jalankan `schema.sql`, kemudian seluruh file `migration_v2.sql` sampai migrasi terbaru secara berurutan sesuai nomor versinya. Untuk database yang sudah berjalan, cukup jalankan migrasi yang belum diterapkan.
 4. `npm run dev` lalu buka http://localhost:3000
 
 ## Saldo awal dan pembukaan hari (migration v17)
