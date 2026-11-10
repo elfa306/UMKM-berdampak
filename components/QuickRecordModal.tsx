@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { X, ArrowDownLeft, ArrowUpRight, Check, ShoppingBag, Delete, Sparkles } from 'lucide-react';
+import { X, ArrowDownLeft, ArrowUpRight, Check, ShoppingBag, Delete, Sparkles, Landmark } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { rupiah, todayISO } from '@/lib/accounting';
 import { kaChing } from '@/lib/sound';
@@ -15,7 +15,7 @@ type QuickRecordModalProps = {
   onClose: () => void;
   onSuccess?: (detail?: QuickSavedDetail) => void;
   /** Tab yang terbuka saat modal dibuka (mis. dari tombol Jual / Keluar / QRIS di beranda). */
-  initialType?: 'masuk' | 'keluar';
+  initialType?: 'masuk' | 'keluar' | 'modal';
   initialMetode?: 'tunai' | 'qris';
 };
 
@@ -26,7 +26,7 @@ export default function QuickRecordModal({
   initialType = 'masuk',
   initialMetode = 'tunai',
 }: QuickRecordModalProps) {
-  const [type, setType] = useState<'masuk' | 'keluar'>('masuk');
+  const [type, setType] = useState<'masuk' | 'keluar' | 'modal'>('masuk');
   const [nominalStr, setNominalStr] = useState<string>('');
   const [keterangan, setKeterangan] = useState<string>('');
   const [metode, setMetode] = useState<'tunai' | 'qris'>('tunai');
@@ -80,14 +80,22 @@ export default function QuickRecordModal({
     setLoading(true);
     setErrMsg('');
 
-    const jenis = type === 'masuk' ? 'penjualan' : 'biaya';
-    const metodeTx = type === 'masuk' ? metode : null;
-    const note = keterangan.trim() || (type === 'masuk' ? 'Penjualan tunai kasir' : kategoriBiaya);
+    const jenis = type === 'keluar' ? 'biaya' : 'penjualan';
+    const metodeTx = metode;
+    const note = keterangan.trim() || (
+      type === 'masuk' ? 'Penjualan tunai kasir' :
+      type === 'keluar' ? kategoriBiaya : 'Setoran modal pemilik'
+    );
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
 
       if (!user) {
+        if (type === 'modal') {
+          setLoading(false);
+          setErrMsg('Setoran modal pemilik hanya dapat dicatat setelah login agar tidak tercampur dengan penjualan.');
+          return;
+        }
         // Mode tamu: tidak ada database, beranda menambahkan barisnya langsung dari event.
         selesai({
           guest: true,
@@ -100,6 +108,23 @@ export default function QuickRecordModal({
       if (!sessionId) {
         setLoading(false);
         setErrMsg('Modal harian belum diisi. Kembali ke Beranda CAVA dan isi modal harian terlebih dahulu. Transaksi belum disimpan.');
+        return;
+      }
+
+      if (type === 'modal') {
+        const { error } = await supabase.rpc('create_accounting_manual_entry', {
+          p_kind: 'capital',
+          p_amount: nominalNumber,
+          p_description: note,
+          p_payment_account: metode === 'qris' ? '1010' : '1000',
+        });
+        if (error) {
+          setLoading(false);
+          setErrMsg(`Setoran modal gagal disimpan: ${error.message}`);
+          return;
+        }
+        // Setoran modal masuk ke jurnal ekuitas, bukan ke transaksi penjualan.
+        selesai({ guest: false, rows: [] });
         return;
       }
 
@@ -186,30 +211,36 @@ export default function QuickRecordModal({
             </div>
 
             {/* Type Switcher: Masuk vs Keluar */}
-            <div className="mt-3 grid grid-cols-2 gap-1 rounded-2xl bg-[#E1EEE8] p-1">
+            <div className="mt-3 grid grid-cols-3 gap-1 rounded-2xl bg-[#E1EEE8] p-1">
               <button
                 type="button"
                 onClick={() => setType('masuk')}
-                className={`flex min-h-[44px] items-center justify-center gap-2 rounded-xl text-xs font-extrabold transition-colors ${
-                  type === 'masuk'
-                    ? 'bg-[#103A57] text-white'
-                    : 'text-[#4F6B7C] hover:text-[#103A57]'
+                className={`flex min-h-[44px] items-center justify-center gap-1 rounded-xl text-[11px] font-extrabold transition-colors ${
+                  type === 'masuk' ? 'bg-[#103A57] text-white' : 'text-[#4F6B7C] hover:text-[#103A57]'
                 }`}
               >
-                <ArrowDownLeft size={16} className={type === 'masuk' ? 'text-[#A9D3C5]' : ''} />
-                <span>Uang masuk</span>
+                <ArrowDownLeft size={15} />
+                <span>Masuk</span>
               </button>
               <button
                 type="button"
                 onClick={() => setType('keluar')}
-                className={`flex min-h-[44px] items-center justify-center gap-2 rounded-xl text-xs font-extrabold transition-colors ${
-                  type === 'keluar'
-                    ? 'bg-[#991B1B] text-white'
-                    : 'text-[#4F6B7C] hover:text-[#103A57]'
+                className={`flex min-h-[44px] items-center justify-center gap-1 rounded-xl text-[11px] font-extrabold transition-colors ${
+                  type === 'keluar' ? 'bg-[#991B1B] text-white' : 'text-[#4F6B7C] hover:text-[#103A57]'
                 }`}
               >
-                <ArrowUpRight size={16} className={type === 'keluar' ? 'text-[#CEE5D6]' : ''} />
-                <span>Uang keluar</span>
+                <ArrowUpRight size={15} />
+                <span>Keluar</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setType('modal')}
+                className={`flex min-h-[44px] items-center justify-center gap-1 rounded-xl text-[11px] font-extrabold transition-colors ${
+                  type === 'modal' ? 'bg-[#366B2B] text-white' : 'text-[#4F6B7C] hover:text-[#103A57]'
+                }`}
+              >
+                <Landmark size={14} />
+                <span>Setor modal</span>
               </button>
             </div>
 
@@ -217,7 +248,7 @@ export default function QuickRecordModal({
             {!(type === 'masuk' && metode === 'qris') && (
             <div className="mt-3 rounded-2xl bg-[#EEF5F1] p-4 text-center">
               <span className="text-xs font-bold text-[#4F6B7C]">
-                {type === 'masuk' ? 'Nominal penjualan' : 'Nominal pengeluaran'}
+                {type === 'masuk' ? 'Nominal penjualan' : type === 'keluar' ? 'Nominal pengeluaran' : 'Nominal setoran modal'}
               </span>
               <div className="mt-1 flex items-baseline justify-center gap-1">
                 <span className={`text-3xl sm:text-4xl font-extrabold tabular-nums tracking-tight ${
@@ -227,7 +258,7 @@ export default function QuickRecordModal({
                 </span>
               </div>
               <p className="mt-1 text-[11px] font-semibold text-[#4F6B7C]">
-                {nominalNumber > 0 ? (type === 'masuk' ? 'Akan ditambahkan ke pemasukan hari ini' : 'Akan dicatat sebagai beban operasional') : 'Ketik angka pada tombol di bawah'}
+                {nominalNumber > 0 ? (type === 'masuk' ? 'Akan ditambahkan ke pemasukan hari ini' : type === 'keluar' ? 'Akan dicatat sebagai pengeluaran usaha' : 'Akan menambah saldo dan modal pemilik, bukan pendapatan penjualan') : 'Ketik angka pada tombol di bawah'}
               </p>
             </div>
             )}
@@ -248,36 +279,7 @@ export default function QuickRecordModal({
             </div>
             )}
 
-            {/* Method (Tunai vs QRIS for Masuk) or Category for Keluar */}
-            {type === 'masuk' ? (
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <span className="text-xs font-bold text-[#103A57]">Metode pembayaran</span>
-                <div className="grid grid-cols-2 gap-1 rounded-xl bg-[#E1EEE8] p-1">
-                  <button
-                    type="button"
-                    onClick={() => setMetode('tunai')}
-                    className={`rounded-lg px-3.5 py-2 text-xs font-extrabold transition ${
-                      metode === 'tunai'
-                        ? 'bg-[#103A57] text-white'
-                        : 'text-[#4F6B7C]'
-                    }`}
-                  >
-                    💵 Tunai
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMetode('qris')}
-                    className={`rounded-lg px-3.5 py-2 text-xs font-extrabold transition ${
-                      metode === 'qris'
-                        ? 'bg-[#103A57] text-white'
-                        : 'text-[#4F6B7C]'
-                    }`}
-                  >
-                    📱 QRIS
-                  </button>
-                </div>
-              </div>
-            ) : (
+            {type === 'keluar' && (
               <div className="mt-3">
                 <select
                   value={kategoriBiaya}
@@ -293,6 +295,34 @@ export default function QuickRecordModal({
               </div>
             )}
 
+            {!(type === 'masuk' && metode === 'qris') && (
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <span className="text-xs font-bold text-[#103A57]">
+                  {type === 'modal' ? 'Setoran disimpan ke' : type === 'keluar' ? 'Dibayar dari' : 'Metode pembayaran'}
+                </span>
+                <div className="grid grid-cols-2 gap-1 rounded-xl bg-[#E1EEE8] p-1">
+                  <button
+                    type="button"
+                    onClick={() => setMetode('tunai')}
+                    className={`rounded-lg px-3.5 py-2 text-xs font-extrabold transition ${
+                      metode === 'tunai' ? 'bg-[#103A57] text-white' : 'text-[#4F6B7C]'
+                    }`}
+                  >
+                    💵 Tunai
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMetode('qris')}
+                    className={`rounded-lg px-3.5 py-2 text-xs font-extrabold transition ${
+                      metode === 'qris' ? 'bg-[#103A57] text-white' : 'text-[#4F6B7C]'
+                    }`}
+                  >
+                    📱 Bank / QRIS
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Mode QRIS: pilih produk, tanpa mengetik harga */}
             {type === 'masuk' && metode === 'qris' && <QrisCashier active={isOpen} onRecorded={(detail) => { if (onSuccess) onSuccess(detail); }} />}
 
@@ -302,7 +332,7 @@ export default function QuickRecordModal({
               type="text"
               value={keterangan}
               onChange={(e) => setKeterangan(e.target.value)}
-              placeholder={type === 'masuk' ? 'Catatan (opsional, mis. 2 Kopi Susu)' : 'Keterangan pengeluaran'}
+              placeholder={type === 'masuk' ? 'Catatan (opsional, mis. 2 Kopi Susu)' : type === 'keluar' ? 'Keterangan pengeluaran' : 'Catatan setoran modal (opsional)'}
               className="mt-3 w-full rounded-xl bg-white px-3 py-2.5 text-xs font-semibold text-[#103A57] placeholder:text-slate-400"
             />
 
@@ -345,7 +375,7 @@ export default function QuickRecordModal({
                 ) : (
                   <span className="flex items-center justify-center gap-2">
                     <Sparkles size={16} className="text-[#A9D3C5]" />
-                    {type === 'masuk' ? 'Simpan uang masuk' : 'Simpan pengeluaran'}
+                    {type === 'masuk' ? 'Simpan uang masuk' : type === 'keluar' ? 'Simpan pengeluaran' : 'Simpan setoran modal'}
                   </span>
                 )}
               </button>
