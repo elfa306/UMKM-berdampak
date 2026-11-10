@@ -530,6 +530,7 @@ export default function Kasir() {
                     name="saldoKas"
                     type="number"
                     min="0"
+                    required
                     step="1"
                     inputMode="numeric"
                     value={saldoKasInput}
@@ -544,6 +545,7 @@ export default function Kasir() {
                     name="saldoBank"
                     type="number"
                     min="0"
+                    required
                     step="1"
                     inputMode="numeric"
                     value={saldoBankInput}
