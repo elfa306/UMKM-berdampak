@@ -193,6 +193,83 @@ grant execute on function public.get_business_cash_balances(date) to authenticat
 revoke all on function public.set_business_opening_balances(numeric,numeric) from public,anon;
 grant execute on function public.set_business_opening_balances(numeric,numeric) to authenticated;
 
+-- Manual journal entries use the same Jakarta date boundary as daily sessions.
+-- This includes owner capital contributions and other manual payments.
+create or replace function public.create_accounting_manual_entry(
+  p_kind text,
+  p_amount numeric,
+  p_description text,
+  p_payment_account text default '1000'
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path=public,pg_temp
+as $$
+declare
+  v_user uuid:=auth.uid();
+  v_source text:=gen_random_uuid()::text;
+  v_lines jsonb;
+  v_cash_code text;
+  v_cash_name text;
+  v_entry_date date := (now() at time zone 'Asia/Jakarta')::date;
+begin
+  if v_user is null then
+    raise exception 'not_authenticated' using errcode='42501';
+  end if;
+  if p_amount is null or p_amount<=0 or p_amount>100000000000 or round(p_amount,2)<>p_amount then
+    raise exception 'invalid_amount';
+  end if;
+  if p_kind not in ('expense','capital','draw','supplier_payment','labor_payment','overhead_payment') then
+    raise exception 'invalid_manual_entry_kind';
+  end if;
+  if p_payment_account not in ('1000','1010') then
+    raise exception 'invalid_payment_account';
+  end if;
+
+  v_cash_code:=p_payment_account;
+  v_cash_name:=case when p_payment_account='1010' then 'Bank / QRIS' else 'Kas' end;
+
+  if p_kind='expense' then
+    v_lines:=jsonb_build_array(
+      jsonb_build_object('code','6000','name','Beban Operasional','type','expense','debit',p_amount,'credit',0),
+      jsonb_build_object('code',v_cash_code,'name',v_cash_name,'type','asset','debit',0,'credit',p_amount)
+    );
+  elsif p_kind='capital' then
+    v_lines:=jsonb_build_array(
+      jsonb_build_object('code',v_cash_code,'name',v_cash_name,'type','asset','debit',p_amount,'credit',0),
+      jsonb_build_object('code','3000','name','Modal Pemilik','type','equity','debit',0,'credit',p_amount)
+    );
+  elsif p_kind='draw' then
+    v_lines:=jsonb_build_array(
+      jsonb_build_object('code','3100','name','Prive / Pengambilan Pemilik','type','contra_equity','debit',p_amount,'credit',0),
+      jsonb_build_object('code',v_cash_code,'name',v_cash_name,'type','asset','debit',0,'credit',p_amount)
+    );
+  elsif p_kind='supplier_payment' then
+    v_lines:=jsonb_build_array(
+      jsonb_build_object('code','2000','name','Utang Usaha','type','liability','debit',p_amount,'credit',0),
+      jsonb_build_object('code',v_cash_code,'name',v_cash_name,'type','asset','debit',0,'credit',p_amount)
+    );
+  elsif p_kind='labor_payment' then
+    v_lines:=jsonb_build_array(
+      jsonb_build_object('code','2110','name','Utang Tenaga Kerja Langsung','type','liability','debit',p_amount,'credit',0),
+      jsonb_build_object('code',v_cash_code,'name',v_cash_name,'type','asset','debit',0,'credit',p_amount)
+    );
+  elsif p_kind='overhead_payment' then
+    v_lines:=jsonb_build_array(
+      jsonb_build_object('code','2120','name','Utang Biaya Overhead Produksi','type','liability','debit',p_amount,'credit',0),
+      jsonb_build_object('code',v_cash_code,'name',v_cash_name,'type','asset','debit',0,'credit',p_amount)
+    );
+  end if;
+
+  return public.post_accounting_journal(
+    v_user,'manual',v_source,left(coalesce(p_description,p_kind),250),v_lines,v_entry_date
+  );
+end $$;
+
+revoke all on function public.create_accounting_manual_entry(text,numeric,text,text) from public,anon;
+grant execute on function public.create_accounting_manual_entry(text,numeric,text,text) to authenticated;
+
 -- Transaksi pengeluaran sekarang mengurangi akun sesuai metode pembayaran.
 -- Data historis tetap mengikuti jurnal yang sudah diposting; perubahan berlaku
 -- untuk transaksi baru setelah migrasi.
