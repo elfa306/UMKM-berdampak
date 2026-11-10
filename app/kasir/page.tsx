@@ -306,6 +306,7 @@ export default function Kasir() {
   async function mulaiHari(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (menyimpanModal) return;
+    const form = new FormData(e.currentTarget);
 
     setMenyimpanModal(true);
     setErr('');
@@ -315,7 +316,6 @@ export default function Kasir() {
       if (authError || !user) throw new Error('Sesi login tidak ditemukan. Silakan masuk kembali.');
 
       if (saldoAwalTersimpan !== true) {
-        const form = new FormData(e.currentTarget);
         const kas = angka(form.get('saldoKas'));
         const bank = angka(form.get('saldoBank'));
         if (!Number.isSafeInteger(kas) || !Number.isSafeInteger(bank) || kas < 0 || bank < 0) {
