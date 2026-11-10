@@ -27,7 +27,7 @@ import { supabase } from '@/lib/supabase';
 import { exportExcel } from '@/lib/exportExcel';
 import { fetchHari } from '@/lib/data';
 import { angka, rupiah, rupiahTanda, summarize, todayISO, tglPanjang, type Product, type Tx } from '@/lib/accounting';
-import { ISTILAH, teksBalikModal } from '@/lib/istilah';
+
 import { useQrisRealtime, type TxBaris } from '@/lib/useQrisRealtime';
 import { isSoundOn, kaChing, setSoundOn, unlockSound } from '@/lib/sound';
 import BottomNav from '@/components/BottomNav';
@@ -760,7 +760,7 @@ export default function Kasir() {
               </div>
             </div>
 
-            {/* Alert 2: Balik modal */}
+            {/* Alert 2: Saldo kas dan bank */}
             <div className="flex items-start gap-3 rounded-2xl bg-[#EEF5F1] p-3.5">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#A9D3C5] text-[#103A57]">
                 <Clock size={18} />
