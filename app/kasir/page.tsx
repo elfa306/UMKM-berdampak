@@ -41,6 +41,7 @@ import { CavaVMark, CavaLogo } from '@/components/CavaLogo';
 
 type Sesi = { id: string; modal_harian: number };
 type SaldoUsaha = { kas: number; bank: number };
+type RingkasanKeuanganHarian = { pendapatan: number; hpp: number; beban: number };
 const keTx = (r: TxBaris | Tx): Tx => ({ ...(r as Tx), jumlah: Number(r.jumlah) });
 
 // Determine greeting based on Jakarta local hour
@@ -73,6 +74,7 @@ export default function Kasir() {
   const [saldoAwalTersimpan, setSaldoAwalTersimpan] = useState<boolean | null>(null);
   const [saldoAwal, setSaldoAwal] = useState<SaldoUsaha>({ kas: 0, bank: 0 });
   const [saldoSaatIni, setSaldoSaatIni] = useState<SaldoUsaha>({ kas: 0, bank: 0 });
+  const [ringkasanHarian, setRingkasanHarian] = useState<RingkasanKeuanganHarian>({ pendapatan: 0, hpp: 0, beban: 0 });
   const [saldoKasInput, setSaldoKasInput] = useState('0');
   const [saldoBankInput, setSaldoBankInput] = useState('0');
 
@@ -106,6 +108,7 @@ export default function Kasir() {
       setSaldoAwalTersimpan(true);
       setSaldoAwal({ kas: 0, bank: 0 });
       setSaldoSaatIni({ kas: 0, bank: 0 });
+      setRingkasanHarian({ pendapatan: 0, hpp: 0, beban: 0 });
       setNamaUsaha('Mode Tamu');
       setProducts([
         { id: 'sample-1', nama: 'Kopi Cava Latte', harga: 18000, stok: 15, satuan: 'cup', aktif: true, jenis_item: 'finished_good' } as any,
@@ -125,7 +128,7 @@ export default function Kasir() {
       supabase.from('products').select('id,nama,harga,stok,stok_minimum,satuan').eq('user_id', user.id).eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
       supabase.from('daily_sessions').select('id,modal_harian').eq('user_id', user.id).eq('tanggal', tanggal).maybeSingle(),
       supabase.from('business_profiles').select('nama_usaha').eq('user_id', user.id).maybeSingle(),
-      supabase.from('business_opening_balances').select('user_id').eq('user_id', user.id).maybeSingle(),
+      supabase.from('business_opening_balances').select('user_id,recorded_at').eq('user_id', user.id).maybeSingle(),
       supabase.rpc('get_business_cash_balances', { p_before_date: tanggal }),
       supabase.rpc('get_business_cash_balances', { p_before_date: tanggalBesokISO }),
     ]);
@@ -151,8 +154,17 @@ export default function Kasir() {
       bank: Number(saldoTerkini.data?.bank_balance ?? 0),
     };
     setSaldoAwalTersimpan(Boolean(opening.data));
-    setSaldoAwal(awal);
+    const tanggalPencatatanAwal = opening.data?.recorded_at
+      ? new Date(opening.data.recorded_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' })
+      : null;
+    // Bila saldo awal baru disimpan hari ini, nilainya menjadi saldo pembuka hari ini.
+    setSaldoAwal(tanggalPencatatanAwal === tanggal ? terkini : awal);
     setSaldoSaatIni(terkini);
+    setRingkasanHarian({
+      pendapatan: Number(saldoTerkini.data?.daily_revenue ?? 0),
+      hpp: Number(saldoTerkini.data?.daily_cogs ?? 0),
+      beban: Number(saldoTerkini.data?.daily_expenses ?? 0),
+    });
     if (!opening.data) {
       setSaldoKasInput(String(Math.max(0, Math.round(terkini.kas))));
       setSaldoBankInput(String(Math.max(0, Math.round(terkini.bank))));
@@ -233,6 +245,27 @@ export default function Kasir() {
     ).catch(() => undefined);
   }, [ready, tanggal]);
 
+  const refreshSaldo = useCallback(async () => {
+    if (!userId || userId === 'guest') return;
+    const besok = new Date(`${tanggal}T12:00:00`);
+    besok.setDate(besok.getDate() + 1);
+    const beforeDate = besok.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+    const { data, error } = await supabase.rpc('get_business_cash_balances', { p_before_date: beforeDate });
+    if (error || !data) {
+      console.error('Gagal memperbarui saldo kas:', error?.message);
+      return;
+    }
+    setSaldoSaatIni({
+      kas: Number(data.cash_balance ?? 0),
+      bank: Number(data.bank_balance ?? 0),
+    });
+    setRingkasanHarian({
+      pendapatan: Number(data.daily_revenue ?? 0),
+      hpp: Number(data.daily_cogs ?? 0),
+      beban: Number(data.daily_expenses ?? 0),
+    });
+  }, [tanggal, userId]);
+
   const tampilkanQris = useCallback((r: TxBaris) => {
     if (sudahDiproses.current.has(r.id)) return;
     sudahDiproses.current.add(r.id);
@@ -249,7 +282,8 @@ export default function Kasir() {
     setQris({ key: tx.id, jumlah: tx.jumlah, invoiceNo: nominalCocok ? invoiceNow?.invoice_no : undefined, nominalCocok });
     kaChing();
     setTimeout(() => setQris((q) => (q?.key === tx.id ? null : q)), 4500);
-  }, []);
+    void refreshSaldo();
+  }, [refreshSaldo]);
 
   const status = useQrisRealtime(userId, {
     onQrisMasuk: tampilkanQris,
@@ -373,6 +407,7 @@ export default function Kasir() {
       const transaction = data?.transaction;
       if (!transaction) return setErr('Transaksi berhasil diproses tetapi data transaksi tidak ditemukan.');
       setTxs((t) => (t.some((x) => x.id === transaction.id) ? t : [...t, keTx(transaction)]));
+      await refreshSaldo();
       kaChing();
       info(`✅ ${row.keterangan} tercatat`);
       return;
@@ -380,6 +415,7 @@ export default function Kasir() {
     const { data, error } = await supabase.from('transactions').insert({ ...row, session_id: sesiAktif.id, qty: 1 }).select('*').single();
     if (error) return setErr(error.message);
     setTxs((t) => (t.some((x) => x.id === data.id) ? t : [...t, keTx(data)]));
+    await refreshSaldo();
     kaChing();
     info(row.jenis === 'penjualan' ? `✅ ${row.keterangan} tercatat` : '✅ Pengeluaran tercatat');
   }
@@ -397,6 +433,7 @@ export default function Kasir() {
       if (error) return setErr(`Pembatalan QRIS simulasi gagal: ${error.message}`);
       const ids = Array.isArray(data?.transaction_ids) ? data.transaction_ids as string[] : [last.id];
       setTxs((current) => current.filter((tx) => !ids.includes(tx.id)));
+      await refreshSaldo();
       info(`✅ Pembayaran QRIS simulasi dibatalkan. ${Number(data?.cancelled_count ?? ids.length)} transaksi dibatalkan dan stok dikembalikan.`);
       return;
     }
@@ -404,18 +441,21 @@ export default function Kasir() {
       const { error } = await supabase.rpc('cancel_inventory_sale', { p_transaction_id: last.id });
       if (error) return setErr(error.message);
       setTxs((t) => t.filter((x) => x.id !== last.id));
+      await refreshSaldo();
       info('✅ Transaksi dibatalkan dan stok dikembalikan.');
       return;
     }
     const { error } = await supabase.from('transactions').delete().eq('id', last.id);
     if (error) return setErr(error.message);
     setTxs((t) => t.slice(0, -1));
+    await refreshSaldo();
   }
 
   // Ringkasan memakai catatan aktual. Tidak ada angka contoh yang ditampilkan sebagai data usaha.
-  const modalHarian = sesi?.modal_harian ?? 0;
-  const liveSummary = summarize(modalHarian, txs);
-  const untungBersih = liveSummary.labaBersih;
+  // Laba harian dihitung dari jurnal: pendapatan dikurangi HPP dan beban aktual.
+  // modal_harian hanya dipertahankan untuk kompatibilitas laporan historis.
+  const liveSummary = summarize(0, txs);
+  const untungBersih = ringkasanHarian.pendapatan - ringkasanHarian.hpp - ringkasanHarian.beban;
   const totalMasuk = liveSummary.pendapatan;
   const totalKeluar = liveSummary.beban;
   const saldoUsahaSekarang = saldoSaatIni.kas + saldoSaatIni.bank;
