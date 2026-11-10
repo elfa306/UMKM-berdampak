@@ -268,6 +268,30 @@ begin
     v_lines,
     (v_tx.created_at at time zone 'Asia/Jakarta')::date
   );
-end $$;
+end $;
+
+-- Bila transaksi dihapus dari riwayat atau dibatalkan, jurnal yang dibuat
+-- otomatis untuk transaksi tersebut ikut dihapus. Ini menjaga saldo kas/bank
+-- dan laba tetap sesuai catatan transaksi yang masih aktif.
+create or replace function public.remove_actual_transaction_accounting()
+returns trigger
+language plpgsql
+security definer
+set search_path=public,pg_temp
+as $
+begin
+  delete from public.journal_entries
+  where user_id=old.user_id
+    and source_type='transaction'
+    and source_id=old.id::text;
+  return old;
+end $;
+
+drop trigger if exists transactions_remove_accounting on public.transactions;
+create trigger transactions_remove_accounting
+after delete on public.transactions
+for each row execute function public.remove_actual_transaction_accounting();
+
+revoke all on function public.remove_actual_transaction_accounting() from public,anon,authenticated;
 
 commit;
