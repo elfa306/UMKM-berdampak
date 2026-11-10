@@ -68,6 +68,7 @@ export default function Kasir() {
   const [hapusTarget, setHapusTarget] = useState<Product | null>(null);
   const [menghapus, setMenghapus] = useState(false);
   const [suara, setSuara] = useState(true);
+  const [menyimpanModal, setMenyimpanModal] = useState(false);
 
   // New CAVA UI states
   const [sembunyikanNominal, setSembunyikanNominal] = useState(false);
@@ -76,7 +77,7 @@ export default function Kasir() {
 
   const sudahDiproses = useRef<Set<string>>(new Set());
   const sesiRef = useRef<Sesi | null>(null);
-  sesiRef.current = sesi;
+  sesiRef.current = sesi && sesi.modal_harian > 0 ? sesi : null;
 
   const info = (t: string) => { setToast(t); setTimeout(() => setToast(''), 2500); };
 
@@ -94,21 +95,31 @@ export default function Kasir() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       setUserId('guest');
+      setSesi(null);
+      setTxs([]);
       setNamaUsaha('Mode Tamu');
       setProducts([
         { id: 'sample-1', nama: 'Kopi Cava Latte', harga: 18000, stok: 15, satuan: 'cup', aktif: true, jenis_item: 'finished_good' } as any,
         { id: 'sample-2', nama: 'Roti Bakar Kaya', harga: 15000, stok: 20, satuan: 'porsi', aktif: true, jenis_item: 'finished_good' } as any,
         { id: 'sample-3', nama: 'Gula Pasir Kristal', harga: 17500, stok: 2, stok_minimum: 5, satuan: 'kg', aktif: true, jenis_item: 'merchandise' } as any,
       ]);
+      publishActiveInvoice(null);
       setReady(true);
       return;
     }
 
+    setUserId(user.id);
     const [p, s, profil] = await Promise.all([
       supabase.from('products').select('id,nama,harga,stok,stok_minimum,satuan').eq('aktif', true).in('jenis_item', ['merchandise', 'finished_good', 'service']).order('created_at'),
-      supabase.from('daily_sessions').select('id,modal_harian').eq('tanggal', tanggal).maybeSingle(),
+      supabase.from('daily_sessions').select('id,modal_harian').eq('user_id', user.id).eq('tanggal', tanggal).maybeSingle(),
       supabase.from('business_profiles').select('nama_usaha').eq('user_id', user.id).maybeSingle(),
     ]);
+
+    if (s.error) {
+      setErr('Sesi harian gagal diperiksa. Periksa koneksi dan izin database, lalu muat ulang.');
+      setReady(true);
+      return;
+    }
 
     // Nama usaha bersumber dari profil akun yang sedang login.
     // Metadata Auth menjadi cadangan bila profil usaha belum tersedia.
@@ -119,16 +130,29 @@ export default function Kasir() {
 
     setProducts((p.data ?? []).map((x) => ({ ...x, harga: Number(x.harga) })));
     if (s.data) {
-      setSesi({ id: s.data.id, modal_harian: Number(s.data.modal_harian) });
-      await importQris(s.data.id);
-      const [t, pending] = await Promise.all([
-        supabase.from('transactions').select('*').eq('session_id', s.data.id).order('created_at'),
-        supabase.from('qris_invoice_drafts').select('invoice_no,total').eq('session_id', s.data.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-      ]);
-      setTxs((t.data ?? []).map((x) => ({ ...x, jumlah: Number(x.jumlah) })) as Tx[]);
-      // Invoice dinamis yang menunggu dibuat dari modal Catat; beranda hanya perlu tahu untuk mencocokkan notifikasi.
-      publishActiveInvoice(pending.data ? { invoice_no: pending.data.invoice_no as string, total: Number(pending.data.total) } : null);
+      const sesiHariIni = { id: s.data.id, modal_harian: Number(s.data.modal_harian) };
+      setSesi(sesiHariIni);
+
+      // Sesi yang dibuat otomatis dengan modal Rp0 dianggap belum dimulai.
+      // Form awal akan memperbarui baris ini sehingga transaksi lama tidak hilang.
+      if (sesiHariIni.modal_harian > 0) {
+        await importQris(s.data.id);
+        const [t, pending] = await Promise.all([
+          supabase.from('transactions').select('*').eq('session_id', s.data.id).order('created_at'),
+          supabase.from('qris_invoice_drafts').select('invoice_no,total').eq('session_id', s.data.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        ]);
+        if (t.error) {
+          setErr('Transaksi hari ini gagal dimuat. Muat ulang halaman untuk mencoba lagi.');
+        }
+        setTxs((t.data ?? []).map((x) => ({ ...x, jumlah: Number(x.jumlah) })) as Tx[]);
+        publishActiveInvoice(pending.data ? { invoice_no: pending.data.invoice_no as string, total: Number(pending.data.total) } : null);
+      } else {
+        setTxs([]);
+        publishActiveInvoice(null);
+      }
     } else {
+      setSesi(null);
+      setTxs([]);
       publishActiveInvoice(null);
     }
     setReady(true);
@@ -203,18 +227,89 @@ export default function Kasir() {
 
   async function mulaiHari(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (menyimpanModal) return;
+
     const modal = angka(new FormData(e.currentTarget).get('modal'));
-    const { error } = await supabase.from('daily_sessions').insert({ tanggal, modal_harian: modal });
-    if (error) return setErr(error.message);
-    load();
+    if (!Number.isSafeInteger(modal) || modal <= 0) {
+      setErr('Masukkan modal harian lebih dari Rp0 agar sesi dapat dimulai.');
+      return;
+    }
+
+    setMenyimpanModal(true);
+    setErr('');
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      const user = authData.user;
+      if (authError || !user) throw new Error('Sesi login tidak ditemukan. Silakan masuk kembali.');
+
+      let tersimpan: { id: string; modal_harian: number | string } | null = null;
+
+      if (sesi?.id) {
+        // Perbarui sesi lama yang telanjur dibuat otomatis dengan modal Rp0.
+        const { data, error } = await supabase
+          .from('daily_sessions')
+          .update({ modal_harian: modal })
+          .eq('id', sesi.id)
+          .eq('user_id', user.id)
+          .select('id,modal_harian')
+          .single();
+        if (error || !data) throw error ?? new Error('Modal harian gagal disimpan.');
+        tersimpan = data;
+      } else {
+        const { data, error } = await supabase
+          .from('daily_sessions')
+          .insert({ user_id: user.id, tanggal, modal_harian: modal })
+          .select('id,modal_harian')
+          .single();
+
+        if (error?.code === '23505') {
+          // Tangani bila sesi dibuat oleh tab/perangkat lain pada saat bersamaan.
+          const { data: existing, error: lookupError } = await supabase
+            .from('daily_sessions')
+            .select('id')
+            .eq('user_id', user.id)
+            .eq('tanggal', tanggal)
+            .maybeSingle();
+          if (lookupError || !existing) throw error;
+          const { data: updated, error: updateError } = await supabase
+            .from('daily_sessions')
+            .update({ modal_harian: modal })
+            .eq('id', existing.id)
+            .eq('user_id', user.id)
+            .select('id,modal_harian')
+            .single();
+          if (updateError || !updated) throw updateError ?? new Error('Modal harian gagal disimpan.');
+          tersimpan = updated;
+        } else {
+          if (error || !data) throw error ?? new Error('Modal harian gagal disimpan.');
+          tersimpan = data;
+        }
+      }
+
+      if (!tersimpan) throw new Error('Modal harian gagal disimpan.');
+      setSesi({ id: tersimpan.id, modal_harian: Number(tersimpan.modal_harian) });
+      await load();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : 'Modal harian gagal disimpan. Coba lagi.');
+    } finally {
+      setMenyimpanModal(false);
+    }
   }
 
   async function catat(row: { jenis: 'penjualan' | 'biaya'; keterangan: string; jumlah: number; metode: 'tunai' | 'qris' | null }, productId?: string) {
-    let sesiAktif = sesi;
+    let sesiAktif = sesi && sesi.modal_harian > 0 ? sesi : null;
     if (!sesiAktif && userId && userId !== 'guest') {
       const id = await ensureTodaySession(tanggal);
-      if (!id) return setErr('Sesi penjualan hari ini gagal dibuat. Transaksi belum tersimpan.');
-      sesiAktif = { id, modal_harian: 0 };
+      if (!id) return setErr('Isi modal harian terlebih dahulu sebelum mencatat transaksi.');
+      const { data: sesiTersimpan, error: sesiError } = await supabase
+        .from('daily_sessions')
+        .select('id,modal_harian')
+        .eq('id', id)
+        .single();
+      if (sesiError || !sesiTersimpan || Number(sesiTersimpan.modal_harian) <= 0) {
+        return setErr('Sesi harian belum dikonfirmasi. Isi modal harian terlebih dahulu.');
+      }
+      sesiAktif = { id: sesiTersimpan.id, modal_harian: Number(sesiTersimpan.modal_harian) };
       setSesi(sesiAktif);
     }
     if (!sesiAktif) {
@@ -321,6 +416,62 @@ export default function Kasir() {
           <p className="text-sm font-bold text-[#307B8E]">Memuat CAVA…</p>
         </div>
       </div>
+    );
+  }
+
+  if (userId && userId !== 'guest' && (!sesi || sesi.modal_harian <= 0)) {
+    return (
+      <main className="min-h-[100svh] bg-[#F2F6F3] px-4 py-8 text-[#103A57] sm:px-6">
+        <div className="mx-auto flex min-h-[calc(100svh-4rem)] w-full max-w-md flex-col justify-center">
+          <div className="mb-7 flex justify-center">
+            <CavaLogo variant="horizontal" height={42} />
+          </div>
+          <form onSubmit={mulaiHari} className="rounded-[28px] border border-[#103A57]/10 bg-white p-6 shadow-[0_18px_55px_-28px_rgba(16,58,87,0.35)] sm:p-7">
+            <div className="mb-5">
+              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-[#307B8E]">Aktivitas harian</p>
+              <h1 className="mt-2 text-2xl font-black tracking-tight">Mulai hari dengan CAVA</h1>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                Masukkan modal operasional hari ini terlebih dahulu. Form ini hanya muncul sekali untuk setiap tanggal.
+              </p>
+            </div>
+
+            {sesi?.id && (
+              <div className="mb-4 rounded-2xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                Sesi hari ini sebelumnya sudah terbentuk dengan modal Rp0. Masukkan modal yang benar untuk melanjutkan. Catatan transaksi yang sudah ada tetap dipertahankan.
+              </div>
+            )}
+
+            <label htmlFor="modal-harian" className="block text-sm font-bold text-[#103A57]">Modal harian</label>
+            <input
+              id="modal-harian"
+              name="modal"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              required
+              placeholder="Contoh: Rp 500.000"
+              onInput={(event) => {
+                const digits = event.currentTarget.value.replace(/\D/g, '');
+                event.currentTarget.value = digits ? `Rp ${Number(digits).toLocaleString('id-ID')}` : '';
+              }}
+              className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-2xl font-extrabold tabular-nums text-[#103A57] outline-none transition focus:border-[#307B8E] focus:bg-white focus:ring-4 focus:ring-[#307B8E]/10"
+            />
+
+            {err && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-semibold leading-5 text-red-700">{err}</p>}
+
+            <button
+              type="submit"
+              disabled={menyimpanModal}
+              className="mt-5 flex min-h-12 w-full items-center justify-center rounded-2xl bg-[#103A57] px-4 py-3 text-sm font-extrabold text-white transition hover:bg-[#205874] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {menyimpanModal ? 'Menyimpan modal…' : 'Simpan dan mulai aktivitas'}
+            </button>
+            <p className="mt-4 text-center text-[11px] leading-5 text-slate-400">
+              Saat membuka CAVA kembali pada hari yang sama, kamu akan langsung masuk ke dashboard.
+            </p>
+          </form>
+        </div>
+      </main>
     );
   }
 
