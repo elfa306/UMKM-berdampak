@@ -11,7 +11,6 @@ import {
   Plus,
   Minus,
   QrCode,
-  Package,
   TrendingUp,
   AlertTriangle,
   Clock,
