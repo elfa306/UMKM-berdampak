@@ -71,7 +71,7 @@ begin
   -- p_before_date adalah tanggal eksklusif, sehingga ringkasan harian
   -- mengacu pada hari kalender tepat sebelumnya.
   select
-    coalesce(sum(jl.credit-jl.debit) filter (where jl.account_code in ('4000','4100')),0),
+    coalesce(sum(jl.credit-jl.debit) filter (where jl.account_type='revenue'),0),
     coalesce(sum(jl.debit-jl.credit) filter (where jl.account_code in ('5000','5100')),0),
     coalesce(sum(jl.debit-jl.credit) filter (where jl.account_type='expense' and jl.account_code not in ('5000','5100')),0)
   into v_daily_revenue,v_daily_cogs,v_daily_expenses
