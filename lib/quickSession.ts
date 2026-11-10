@@ -40,13 +40,29 @@ export const SAMPLE_PRODUCTS = [
   { id: 'sample-3', nama: 'Gula Pasir Kristal', harga: 17500 },
 ];
 
-/** Ambil sesi harian untuk tanggal ini; dibuat (modal 0) bila belum ada. */
+/** Ambil sesi yang sudah dibuka dari halaman Kasir untuk tanggal ini. */
 export async function ensureTodaySession(tanggal: string): Promise<string | null> {
-  // Sesi hanya boleh dipakai untuk pencatatan setelah modal harian diisi.
-  // Jangan membuat sesi Rp0 secara otomatis karena akan melewati form awal hari.
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  const user = authData.user;
+  if (authError || !user) return null;
+
+  // Sebelum ada sesi harian, pemilik harus lebih dulu mengonfirmasi saldo awal usaha.
+  const { data: opening, error: openingError } = await supabase
+    .from('business_opening_balances')
+    .select('user_id')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (openingError) {
+    console.error('Gagal memeriksa saldo awal usaha:', openingError.message);
+    return null;
+  }
+  if (!opening) return null;
+
   const { data: existing, error } = await supabase
     .from('daily_sessions')
-    .select('id,modal_harian')
+    .select('id')
+    .eq('user_id', user.id)
     .eq('tanggal', tanggal)
     .maybeSingle();
 
@@ -54,6 +70,5 @@ export async function ensureTodaySession(tanggal: string): Promise<string | null
     console.error('Gagal memeriksa sesi harian:', error.message);
     return null;
   }
-  if (existing?.id && Number(existing.modal_harian) > 0) return existing.id as string;
-  return null;
+  return existing?.id ?? null;
 }
