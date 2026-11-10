@@ -468,7 +468,8 @@ export default function Kasir() {
   // Laba harian dihitung dari jurnal: pendapatan dikurangi HPP dan beban aktual.
   // modal_harian hanya dipertahankan untuk kompatibilitas laporan historis.
   const liveSummary = summarize(0, txs);
-  const untungBersih = ringkasanHarian.pendapatan - ringkasanHarian.hpp - ringkasanHarian.beban;
+  const hppHarian = ringkasanHarian.hpp > 0 ? ringkasanHarian.hpp : (sesi?.modal_harian ?? 0);
+  const untungBersih = ringkasanHarian.pendapatan - hppHarian - ringkasanHarian.beban;
   const totalMasuk = liveSummary.pendapatan;
   const totalKeluar = liveSummary.beban;
   const saldoUsahaSekarang = saldoSaatIni.kas + saldoSaatIni.bank;
