@@ -39,6 +39,8 @@
 html, body {
   margin: 0;
   padding: 0;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 body {
@@ -94,6 +96,7 @@ body {
   margin: 0 auto;
   padding: 0 16px calc(104px + env(safe-area-inset-bottom));
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-content: start;
 }
@@ -216,6 +219,7 @@ body {
 
 .glass-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
