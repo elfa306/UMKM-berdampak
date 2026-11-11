@@ -29,7 +29,7 @@ class MainActivity : Activity() {
     private var webLoaded = false
     private val dark = Color.rgb(16, 60, 53)
     private val green = Color.rgb(22, 122, 104)
-    private val background = Color.rgb(245, 248, 247)
+    private val pageBackground = Color.rgb(245, 248, 247)
     private val ink = Color.rgb(31, 47, 44)
     private val muted = Color.rgb(100, 117, 111)
 
@@ -45,7 +45,7 @@ class MainActivity : Activity() {
     private fun buildShell() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(background)
+            setBackgroundColor(pageBackground)
         }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
