@@ -154,7 +154,7 @@ body {
 }
 
 .home-band {
-  padding-bottom: 84px;
+  padding-bottom: 76px;
 }
 
 @media (min-width: 1024px) {
@@ -197,7 +197,7 @@ body {
 
 /* Kartu utama yang menumpuk di atas header (saldo / ringkasan) */
 .home-hero {
-  margin-top: -68px;
+  margin-top: -54px;
   position: relative;
   z-index: 2;
 }
@@ -438,6 +438,13 @@ input:focus, select:focus {
   transition: background 0.15s, color 0.15s;
 }
 
+.toggle-stats button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 .toggle-stats button.active {
   background: var(--cava-prussian);
   color: #ffffff;
@@ -557,6 +564,13 @@ input:focus, select:focus {
   height: 100%;
   border-radius: 999px;
   background: var(--cava-teal);
+}
+
+/* Kolom bulan/tanggal bawaan browser tidak boleh melebar melewati kartu */
+input[type='month'],
+input[type='date'] {
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Angka rata untuk data keuangan */

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Download, FileSpreadsheet, FileText, Search, TrendingUp, TrendingDown, Clock, ShieldCheck, ChevronDown } from 'lucide-react';
+import { Banknote, ChartColumn, ChevronDown, Download, FileSpreadsheet, FileText, History, QrCode, Search, TrendingUp, TrendingDown, Clock, ShieldCheck, X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { fetchHari, type Hari } from '@/lib/data';
 import { PALET, rupiah, rupiahTanda, summarize, tglPendek, todayISO } from '@/lib/accounting';
@@ -209,8 +209,8 @@ export default function Laporan() {
       {/* Hero Card (Prussian Blue #103A57) */}
       <Rise delay={0.02}>
         <div className="balance-card">
-          <small>UNTUNG BERSIH PERIODE</small>
-          <h2 className="tabular-nums">
+          <small>Untung bersih periode</small>
+          <h2 className={`tabular-nums ${totalLaba < 0 ? 'neg' : ''}`}>
             {rupiah(totalLaba)}
           </h2>
           <div className="stat3">
@@ -235,23 +235,26 @@ export default function Laporan() {
 
       {/* Excel Bulanan Card */}
       <section className="glass-card" data-html2canvas-ignore>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <b className="text-xs font-black text-[#103A57]">Laporan Akuntansi SAK EMKM</b>
-            <p className="text-[11px] text-[#307B8E] mt-0.5">Format spreadsheet Excel siap diserahkan ke bank</p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="ico-tile !h-10 !w-10 !rounded-xl"><FileSpreadsheet size={18} /></span>
+            <div className="min-w-0">
+              <b className="text-[13px] font-black text-[#103A57]">Laporan Akuntansi SAK EMKM</b>
+              <p className="mt-0.5 text-[11px] font-semibold text-[#4F6B7C]">Format Excel siap diserahkan ke bank</p>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full items-center gap-2 sm:w-auto">
             <input
               aria-label="Pilih bulan"
               type="month"
               value={bulanAkuntansi}
               onChange={(e) => setBulanAkuntansi(e.target.value)}
-              className="max-w-[150px] rounded-xl border border-[#307B8E]/20 p-2 text-xs font-bold text-[#103A57]"
+              className="!w-auto min-w-0 flex-1 !rounded-xl !px-3 !py-2.5 !text-[13px] sm:!w-[170px] sm:flex-none"
             />
             <button
               onClick={unduhLaporanAkuntansiBulanan}
               disabled={unduhAkuntansi || !bulanAkuntansi}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#103A57] px-3.5 py-2 text-xs font-black text-white hover:bg-[#103A57]/90 active:scale-95 transition disabled:opacity-50"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#103A57] px-4 py-3 text-[13px] font-extrabold text-white transition hover:bg-[#174968] active:scale-95 disabled:opacity-50"
             >
               <FileSpreadsheet size={15} />
               {unduhAkuntansi ? 'Menyiapkan…' : 'Unduh'}
@@ -266,10 +269,10 @@ export default function Laporan() {
       {/* Toggle View: Ringkasan vs Transaksi */}
       <div className="toggle-stats" data-html2canvas-ignore>
         <button className={tab === 'ringkasan' ? 'active' : ''} onClick={() => setTab('ringkasan')}>
-          📊 Ringkasan & Tren
+          <ChartColumn size={16} /> Ringkasan &amp; Tren
         </button>
         <button className={tab === 'transaksi' ? 'active' : ''} onClick={() => setTab('transaksi')}>
-          🕘 Riwayat Mutasi
+          <History size={16} /> Riwayat Mutasi
         </button>
       </div>
 
@@ -290,13 +293,13 @@ export default function Laporan() {
               data={st.rows.map((r) => ({ label: r.label, value: r.nilai, color: r.color }))}
               center={rupiah(st.total)}
             />
-            {st.rows.length === 0 && <p className="text-center text-xs text-slate-400 py-4">Belum ada data</p>}
+            {st.rows.length === 0 && <p className="text-center text-xs font-semibold text-[#4F6B7C] py-4">Belum ada data</p>}
             <div className="divide-y divide-slate-100">
               {st.rows.map((r) => {
                 const p = st.total > 0 ? Math.round((r.nilai / st.total) * 100) : 0;
                 return (
                   <div key={r.label} className="cat-item">
-                    <div className="cat-dot" style={{ background: r.color + '22', color: r.color }}>
+                    <div className="cat-dot" style={{ background: r.color + '33', color: '#103A57' }}>
                       {p}%
                     </div>
                     <div className="flex-1 min-w-0">
@@ -304,7 +307,7 @@ export default function Laporan() {
                         <b className="truncate text-[#103A57]">{r.label}</b>
                         <b className="tabular-nums text-[#103A57]">{rupiah(r.nilai)}</b>
                       </div>
-                      <div className="text-[11px] text-slate-400">
+                      <div className="text-[11px] font-semibold text-[#4F6B7C]">
                         {r.n}× {jenis === 'penjualan' ? 'terjual' : 'dicatat'}
                       </div>
                       <div className="progress">
@@ -321,11 +324,11 @@ export default function Laporan() {
           <div className="glass-card">
             <span className="label">Pembayaran: Tunai vs QRIS</span>
             <div className="flex justify-between text-xs font-bold text-[#103A57]">
-              <span>💵 Tunai</span>
+              <span className="inline-flex items-center gap-2"><Banknote size={16} className="text-[#103A57]" /> Tunai</span>
               <span className="tabular-nums">{rupiah(st.tunai)}</span>
             </div>
             <div className="flex justify-between text-xs font-bold text-[#307B8E]">
-              <span>📱 QRIS</span>
+              <span className="inline-flex items-center gap-2"><QrCode size={16} className="text-[#307B8E]" /> QRIS</span>
               <span className="tabular-nums">{rupiah(st.qris)}</span>
             </div>
             <div className="progress">
@@ -337,7 +340,7 @@ export default function Laporan() {
           {/* Tren Grafik */}
           <div className="glass-card">
             <span className="label">Tren Harian Periode</span>
-            <TrenChart data={st.tren} tinggi={180} />
+            <TrenChart data={st.tren} tinggi={200} />
           </div>
         </>
       )}
@@ -346,7 +349,7 @@ export default function Laporan() {
         <div className="space-y-3">
           {/* Search bar */}
           <div className="relative">
-            <Search size={16} className="absolute left-3.5 top-3.5 text-slate-400" />
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#307B8E]" />
             <input
               value={q}
               onChange={(e) => {
@@ -354,7 +357,7 @@ export default function Laporan() {
                 setPage(1);
               }}
               placeholder="Cari transaksi atau tanggal…"
-              className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white border border-[#307B8E]/15 text-xs font-semibold text-[#103A57]"
+              className="!rounded-2xl !border-0 !py-3 !pl-10 !pr-4 !text-[13px] shadow-[var(--shadow-card)]"
             />
           </div>
 
@@ -362,7 +365,7 @@ export default function Laporan() {
           {slice.map(({ h, s }) => {
             const isOpen = open === h.tanggal;
             return (
-              <div key={h.tanggal} className="rounded-2xl bg-white p-4 shadow-sm border border-[#307B8E]/12">
+              <div key={h.tanggal} className="card !p-4">
                 <button
                   type="button"
                   onClick={() => setOpen(isOpen ? null : h.tanggal)}
@@ -370,39 +373,39 @@ export default function Laporan() {
                 >
                   <div>
                     <h3 className="text-xs font-black text-[#103A57]">{tglPendek(h.tanggal)}</h3>
-                    <p className="text-[11px] text-slate-400">{h.txs.length} transaksi</p>
+                    <p className="text-[11px] font-semibold text-[#4F6B7C]">{h.txs.length} transaksi</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`text-xs font-black tabular-nums ${s.labaBersih >= 0 ? 'text-[#366B2B]' : 'text-[#991B1B]'}`}>
                       {rupiahTanda(s.labaBersih, s.labaBersih >= 0)}
                     </span>
-                    <ChevronDown size={16} className={`text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                    <ChevronDown size={16} className={`text-[#307B8E] transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                   </div>
                 </button>
 
                 {isOpen && (
-                  <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+                  <div className="mt-3 border-t border-[#E6F0EB] pt-2">
                     {h.txs.map((t) => {
                       const isSale = t.jenis === 'penjualan';
                       return (
-                        <div key={t.id} className="flex items-center justify-between text-xs py-1.5 border-b border-slate-50 last:border-0">
-                          <div>
-                            <p className="font-bold text-[#103A57]">{t.keterangan}</p>
-                            <span className="text-[10px] text-slate-400">
+                        <div key={t.id} className="flex items-center justify-between gap-3 border-b border-[#E6F0EB] py-2.5 text-xs last:border-0">
+                          <div className="min-w-0">
+                            <p className="truncate font-bold text-[#103A57]">{t.keterangan}</p>
+                            <span className="text-[10px] font-semibold text-[#4F6B7C]">
                               {t.metode ? t.metode.toUpperCase() : 'Tunai'} · {t.qty}x
                             </span>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex shrink-0 items-center gap-1">
                             <span className={`font-black tabular-nums ${isSale ? 'text-[#366B2B]' : 'text-[#991B1B]'}`}>
                               {rupiahTanda(t.jumlah, isSale)}
                             </span>
                             <button
                               type="button"
                               onClick={() => hapus(t.id)}
-                              className="text-slate-300 hover:text-red-500 font-bold px-1"
+                              className="grid h-8 w-8 place-items-center rounded-full text-[#4F6B7C]/60 transition hover:bg-red-50 hover:text-[#991B1B]"
                               aria-label="Hapus transaksi"
                             >
-                              ✕
+                              <X size={15} />
                             </button>
                           </div>
                         </div>
@@ -415,7 +418,7 @@ export default function Laporan() {
           })}
 
           {slice.length === 0 && (
-            <div className="rounded-2xl bg-white p-8 text-center text-xs text-slate-400">
+            <div className="card py-10 text-center text-xs font-semibold text-[#4F6B7C]">
               Tidak ada catatan transaksi pada filter ini.
             </div>
           )}
@@ -426,7 +429,7 @@ export default function Laporan() {
               <button
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-[#103A57] disabled:opacity-40 border border-slate-200"
+                className="rounded-xl bg-white px-4 py-2.5 text-xs font-extrabold text-[#103A57] shadow-[var(--shadow-card)] disabled:opacity-40"
               >
                 ← Sebelumnya
               </button>
@@ -436,7 +439,7 @@ export default function Laporan() {
               <button
                 disabled={page >= pages}
                 onClick={() => setPage((p) => Math.min(pages, p + 1))}
-                className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-[#103A57] disabled:opacity-40 border border-slate-200"
+                className="rounded-xl bg-white px-4 py-2.5 text-xs font-extrabold text-[#103A57] shadow-[var(--shadow-card)] disabled:opacity-40"
               >
                 Selanjutnya →
               </button>
@@ -450,7 +453,7 @@ export default function Laporan() {
         <button
           type="button"
           onClick={cetakPdf}
-          className="w-full rounded-2xl bg-white border border-[#307B8E]/20 py-3.5 px-4 text-xs font-extrabold text-[#103A57] shadow-sm hover:bg-slate-50 transition flex items-center justify-center gap-2"
+          className="btn-soft flex items-center justify-center gap-2"
         >
           <FileText size={16} /> Unduh Laporan PDF
         </button>

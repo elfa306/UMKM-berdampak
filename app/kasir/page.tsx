@@ -4,25 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
-import {
-  Bell,
-  Eye,
-  EyeOff,
-  Plus,
-  Minus,
-  QrCode,
-  TrendingUp,
-  AlertTriangle,
-  Clock,
-  ChevronRight,
-  ShoppingBag,
-  History,
-  Sparkles,
-  Volume2,
-  VolumeX,
-  X,
-  Check,
-} from 'lucide-react';
+import { Bell, Eye, EyeOff, Plus, Minus, QrCode, TrendingUp, AlertTriangle, Clock, ChevronRight, ShoppingBag, History, Sparkles, Volume2, VolumeX, X, Check, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { exportExcel } from '@/lib/exportExcel';
 import { fetchHari } from '@/lib/data';
@@ -37,7 +19,7 @@ import TrenChart, { type TitikTren } from '@/components/TrenChart';
 import { Press, Rise } from '@/components/Motion';
 import { bukaCatatTransaksi, TRANSACTION_SAVED_EVENT, ensureTodaySession, type QuickSavedDetail } from '@/lib/quickSession';
 import { announceInvoiceMatch, getActiveInvoice, publishActiveInvoice } from '@/lib/qrisBridge';
-import { CavaVMark, CavaLogo } from '@/components/CavaLogo';
+import { CavaLogo } from '@/components/CavaLogo';
 
 type Sesi = { id: string; modal_harian: number };
 type SaldoUsaha = { kas: number; bank: number };
@@ -591,21 +573,15 @@ export default function Kasir() {
       {/* Header biru + kartu ringkasan yang menumpuk di atasnya */}
       <div className="home-band">
         <header className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10">
-              <CavaVMark size={26} />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold text-[#A9D3C5]">{salamWaktu()},</p>
-              <h1 className="truncate text-base font-extrabold tracking-tight text-white">{namaUsaha}</h1>
-            </div>
-          </div>
+          <Link href="/kasir" aria-label="CAVA, beranda" className="inline-flex shrink-0">
+            <CavaLogo variant="horizontal" height={28} light />
+          </Link>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={gantiSuara}
               className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
-              aria-label="Toggle sound"
+              aria-label={suara ? 'Matikan suara' : 'Nyalakan suara'}
             >
               {suara ? <Volume2 size={18} /> : <VolumeX size={18} className="text-white/50" />}
             </button>
@@ -620,56 +596,64 @@ export default function Kasir() {
             </button>
           </div>
         </header>
+        <div className="mt-6 min-w-0">
+          <p className="m-0 text-xs font-semibold text-[#A9D3C5]">{salamWaktu()},</p>
+          <h1 className="m-0 mt-0.5 truncate text-[1.55rem] font-extrabold leading-tight tracking-tight text-white">{namaUsaha}</h1>
+        </div>
       </div>
 
       <Rise delay={0.02} className="home-hero">
-        <section className="balance-card">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-[#4F6B7C]">Untung bersih hari ini</span>
-            <button
-              type="button"
-              onClick={() => setSembunyikanNominal(!sembunyikanNominal)}
-              className="p-1 text-[#307B8E] transition hover:text-[#103A57]"
-              aria-label={sembunyikanNominal ? 'Tampilkan saldo' : 'Sembunyikan saldo'}
-            >
-              {sembunyikanNominal ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
-          </div>
+        <section className="balance-card !p-0">
+          <div className="px-5 pb-4 pt-5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-[#4F6B7C]">Untung bersih hari ini</span>
+              <button
+                type="button"
+                onClick={() => setSembunyikanNominal(!sembunyikanNominal)}
+                className="-mr-1 grid h-8 w-8 place-items-center rounded-full text-[#307B8E] transition hover:bg-[#E3F0EA] hover:text-[#103A57]"
+                aria-label={sembunyikanNominal ? 'Tampilkan saldo' : 'Sembunyikan saldo'}
+              >
+                {sembunyikanNominal ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
 
-          <div className="mt-1">
-            <span className="text-[1.9rem] font-extrabold tabular-nums tracking-tight text-[#103A57]">
+            <p className="m-0 mt-1 text-[2rem] font-extrabold leading-tight tabular-nums tracking-tight text-[#103A57]">
               {sembunyikanNominal ? 'Rp •••••••' : rupiah(untungBersih)}
-            </span>
+            </p>
+
+            <div className="mt-4 grid grid-cols-2 divide-x divide-[#103A57]/10">
+              <div className="pr-4">
+                <span className="flex items-center gap-1.5 text-[11px] font-bold text-[#4F6B7C]">
+                  <ArrowDownLeft size={14} className="text-[#366B2B]" /> Masuk
+                </span>
+                <p className="m-0 mt-0.5 text-sm font-extrabold tabular-nums text-[#366B2B]">
+                  {sembunyikanNominal ? 'Rp •••' : rupiah(totalMasuk)}
+                </p>
+              </div>
+              <div className="pl-4">
+                <span className="flex items-center gap-1.5 text-[11px] font-bold text-[#4F6B7C]">
+                  <ArrowUpRight size={14} className="text-[#991B1B]" /> Keluar
+                </span>
+                <p className="m-0 mt-0.5 text-sm font-extrabold tabular-nums text-[#991B1B]">
+                  {sembunyikanNominal ? 'Rp •••' : rupiah(totalKeluar)}
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <div className="rounded-xl bg-[#EEF5F1] px-3 py-2.5">
-              <span className="text-[10px] font-bold text-[#4F6B7C]">Saldo kas tunai</span>
-              <p className="mt-0.5 text-sm font-extrabold tabular-nums text-[#103A57]">
-                {sembunyikanNominal ? 'Rp •••' : rupiah(saldoSaatIni.kas)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-[#EEF5F1] px-3 py-2.5">
-              <span className="text-[10px] font-bold text-[#4F6B7C]">Saldo bank / QRIS</span>
-              <p className="mt-0.5 text-sm font-extrabold tabular-nums text-[#103A57]">
-                {sembunyikanNominal ? 'Rp •••' : rupiah(saldoSaatIni.bank)}
-              </p>
-            </div>
-          </div>
-
-          <div className="stat3">
-            <div>
-              <b className="tabular-nums">{sembunyikanNominal ? 'Rp •••' : rupiah(totalMasuk)}</b>
-              <span>Masuk</span>
-            </div>
-            <div>
-              <b className="tabular-nums">{sembunyikanNominal ? 'Rp •••' : rupiah(totalKeluar)}</b>
-              <span>Keluar</span>
-            </div>
-            <div>
-              <b className="tabular-nums">{sembunyikanNominal ? 'Rp •••' : rupiah(saldoUsahaSekarang)}</b>
-              <span>Saldo usaha</span>
-            </div>
+          <div className="grid grid-cols-3 gap-px rounded-b-[22px] bg-[#103A57]/10">
+            {[
+              { label: 'Kas tunai', nilai: saldoSaatIni.kas },
+              { label: 'Bank / QRIS', nilai: saldoSaatIni.bank },
+              { label: 'Saldo usaha', nilai: saldoUsahaSekarang },
+            ].map((k, i) => (
+              <div key={k.label} className={`bg-[#E3F0EA] px-3 py-3 ${i === 0 ? 'rounded-bl-[22px]' : ''} ${i === 2 ? 'rounded-br-[22px]' : ''}`}>
+                <span className="block text-[10px] font-bold text-[#4F6B7C]">{k.label}</span>
+                <p className="m-0 mt-0.5 truncate text-[12.5px] font-extrabold tabular-nums text-[#103A57]">
+                  {sembunyikanNominal ? 'Rp •••' : rupiah(k.nilai)}
+                </p>
+              </div>
+            ))}
           </div>
         </section>
       </Rise>
@@ -758,7 +742,7 @@ export default function Kasir() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* 4. Pengingat Usaha (Business Alerts) */}
         <Rise delay={0.08} className="h-full">
-          <section className="card space-y-3 h-full">
+          <section className="card grid h-full content-start gap-3">
             <h2 className="card-title">Pengingat Usaha</h2>
 
             {/* Alert 1: katalog produk */}
@@ -767,10 +751,10 @@ export default function Kasir() {
                 <ShoppingBag size={18} />
               </span>
               <div className="min-w-0 flex-1">
-                <h3 className="text-xs font-black text-[#103A57]">
+                <h3 className="m-0 text-xs font-black text-[#103A57]">
                   {products.length > 0 ? `${products.length} produk siap dicatat` : 'Katalog produk masih kosong'}
                 </h3>
-                <p className="mt-0.5 text-[11px] font-semibold text-[#307B8E]">
+                <p className="m-0 mt-0.5 text-[11px] font-semibold leading-relaxed text-[#307B8E]">
                   {products.length > 0 ? 'Pilih produk saat mencatat penjualan. Harga beli dan harga jual tersimpan di katalog.' : 'Tambahkan menu beserta harga beli dan harga jual melalui Katalog Produk.'}
                 </p>
               </div>
@@ -782,10 +766,10 @@ export default function Kasir() {
                 <Clock size={18} />
               </span>
               <div className="min-w-0 flex-1">
-                <h3 className="text-xs font-black text-[#103A57]">
+                <h3 className="m-0 text-xs font-black text-[#103A57]">
                   Saldo usaha {rupiah(saldoUsahaSekarang)}
                 </h3>
-                <p className="mt-0.5 text-[11px] font-semibold text-[#307B8E]">
+                <p className="m-0 mt-0.5 text-[11px] font-semibold leading-relaxed text-[#307B8E]">
                   Kas tunai dan bank/QRIS dihitung terpisah. Tambahan dana pemilik dicatat sebagai setoran modal.
                 </p>
               </div>
@@ -805,7 +789,7 @@ export default function Kasir() {
                   {missionProgress}/3
                 </span>
               </div>
-              <p className="text-[11px] text-white/80 mt-1">
+              <p className="m-0 mt-1 text-[11px] leading-relaxed text-white/80">
                 Tercatat {missionProgress} dari 3 target transaksi harian untuk mempertahankan skor kelayakan kredit Anda.
               </p>
             </div>
@@ -829,12 +813,12 @@ export default function Kasir() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="card-title">Katalog Kasir</h2>
-              <p className="mt-0.5 text-[11px] font-semibold text-[#4F6B7C]">Ketuk produk untuk mencatat penjualan tunai</p>
+              <p className="m-0 mt-0.5 text-[11px] font-semibold text-[#4F6B7C]">Ketuk produk untuk mencatat penjualan tunai</p>
             </div>
             <button
               type="button"
               onClick={() => setShowCatalog(!showCatalog)}
-              className="rounded-full bg-[#E3F0EA] px-3.5 py-2 text-xs font-extrabold text-[#103A57] transition hover:bg-[#CEE5D6]"
+              className="shrink-0 whitespace-nowrap rounded-full bg-[#E3F0EA] px-4 py-2.5 text-xs font-extrabold text-[#103A57] transition hover:bg-[#CEE5D6]"
             >
               {showCatalog ? 'Sembunyikan' : 'Buka Kasir'}
             </button>
