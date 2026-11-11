@@ -16,6 +16,7 @@ import {
   Clock,
   ChevronRight,
   ShoppingBag,
+  History,
   Sparkles,
   Volume2,
   VolumeX,
@@ -689,7 +690,7 @@ export default function Kasir() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-5 gap-2 text-center">
+          <div className="grid grid-cols-3 gap-3 text-center sm:grid-cols-6">
             {/* 1. Jual */}
             <button
               type="button"
@@ -740,6 +741,14 @@ export default function Kasir() {
                 <TrendingUp size={19} strokeWidth={2.2} />
               </span>
               <span className="text-[11px] font-bold text-[#103A57]">Harga</span>
+            </Link>
+
+            {/* 6. Riwayat */}
+            <Link href="/laporan" className="flex flex-col items-center gap-1.5 group">
+              <span className="ico-tile group-active:scale-95 transition">
+                <History size={19} strokeWidth={2.2} />
+              </span>
+              <span className="text-[11px] font-bold text-[#103A57]">Riwayat</span>
             </Link>
           </div>
         </section>
