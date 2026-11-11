@@ -13,6 +13,7 @@ import { angka, rupiah, rupiahTanda, summarize, todayISO, tglPanjang, type Produ
 import { useQrisRealtime, type TxBaris } from '@/lib/useQrisRealtime';
 import { isSoundOn, kaChing, setSoundOn, unlockSound } from '@/lib/sound';
 import BottomNav from '@/components/BottomNav';
+import QrisToast from '@/components/QrisToast';
 import RpInput from '@/components/RpInput';
 import AnimatedRupiah from '@/components/AnimatedRupiah';
 import TrenChart, { type TitikTren } from '@/components/TrenChart';
@@ -853,31 +854,13 @@ export default function Kasir() {
 
       {/* Notification Toast */}
       {toast && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-[#103A57] text-white px-4 py-2.5 rounded-2xl text-xs font-extrabold shadow-xl z-50 border border-white/20">
+        <div className="fixed inset-x-4 bottom-[calc(96px+env(safe-area-inset-bottom))] z-50 mx-auto w-fit max-w-[calc(100vw-32px)] rounded-2xl border border-white/20 bg-[#103A57] px-4 py-2.5 text-center text-xs font-extrabold leading-snug text-white shadow-xl">
           {toast}
         </div>
       )}
 
       {/* Real-time QRIS incoming toast */}
-      <AnimatePresence>
-        {qris && (
-          <motion.div
-            key={qris.key}
-            initial={{ y: -90, x: '-50%', opacity: 0 }}
-            animate={{ y: 0, x: '-50%', opacity: 1 }}
-            exit={{ y: -90, x: '-50%', opacity: 0 }}
-            className="fixed top-5 left-1/2 -translate-x-1/2 z-[110] w-[90%] max-w-sm rounded-2xl bg-[#103A57] text-white p-4 shadow-2xl border border-[#A9D3C5]/40 flex items-center gap-3"
-          >
-            <span className="text-2xl">🔔</span>
-            <div className="min-w-0">
-              <p className="text-[11px] font-bold text-[#A9D3C5]">{qris.title || (qris.nominalCocok ? 'Notifikasi QRIS sesuai nominal' : 'Uang masuk QRIS')}</p>
-              <p className="text-lg font-black tabular-nums">{rupiah(qris.jumlah)}</p>
-              {qris.detail && <p className="mt-0.5 text-[10px] font-semibold text-white/80">{qris.detail}</p>}
-              {qris.invoiceNo && <p className="mt-0.5 text-[10px] font-semibold text-white/80">Nominal sama dengan {qris.invoiceNo}. Periksa mutasi GoPay Merchant; invoice tidak otomatis lunas.</p>}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <QrisToast data={qris} />
 
       <BottomNav />
     </div>
