@@ -95,7 +95,7 @@ export default function BottomNav() {
       >
         {[
           { href: '/kasir', label: 'Beranda', Icon: Home, on: isBeranda },
-          { href: '/laporan', label: 'Riwayat', Icon: History, on: isRiwayat },
+          { href: '/harga', label: 'Cek Harga', Icon: TrendingUp, on: isHarga },
         ].map(({ href, label, Icon, on }) => (
           <Link key={href} href={href} aria-current={on ? 'page' : undefined} className="flex flex-col items-center gap-0.5 py-1">
             <span className={`grid h-8 w-14 place-items-center rounded-full transition-colors ${on ? 'bg-[#CEE5D6] text-[#103A57]' : 'text-slate-400'}`}>
