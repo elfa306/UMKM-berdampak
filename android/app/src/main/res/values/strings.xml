@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">CAVA</string>
+    <string name="notification_listener_label">Pembaca notifikasi CAVA</string>
+    <string name="notification_listener_description">Membaca notifikasi hanya dari aplikasi yang dipilih pengguna sebagai GoPay Merchant.</string>
+</resources>
