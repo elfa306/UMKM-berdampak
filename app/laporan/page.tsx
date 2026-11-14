@@ -12,6 +12,7 @@ import { ISTILAH } from '@/lib/istilah';
 import { Press, Rise } from '@/components/Motion';
 import TrenChart from '@/components/TrenChart';
 import BottomNav from '@/components/BottomNav';
+import { useConfirm } from '@/components/ConfirmDialog';
 import Donut from '@/components/Donut';
 import PeriodFilter, { preset, type Periode } from '@/components/PeriodFilter';
 
@@ -22,6 +23,7 @@ type Tab = 'ringkasan' | 'transaksi';
 const CAVA_CHART_COLORS = ['#103A57', '#307B8E', '#A9D3C5', '#366B2B', '#D97706', '#991B1B'];
 
 export default function Laporan() {
+  const { confirm, confirmDialog } = useConfirm();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('ringkasan');
   const [periode, setPeriode] = useState<Periode>(() => preset('30'));
@@ -171,7 +173,12 @@ export default function Laporan() {
   }
 
   async function hapus(id: string) {
-    if (!confirm('Hapus transaksi ini? Saldo, jurnal, dan laporan akan diperbarui.')) return;
+    if (!(await confirm({
+      title: 'Hapus transaksi?',
+      message: 'Hapus transaksi ini? Saldo, jurnal, dan laporan akan diperbarui.',
+      confirmLabel: 'Ya, hapus',
+      tone: 'danger',
+    }))) return;
     setErr('');
     const target = hari.flatMap((item) => item.txs).find((tx) => tx.id === id);
 
@@ -351,6 +358,7 @@ export default function Laporan() {
           <div className="relative">
             <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#307B8E]" />
             <input
+              aria-label="Cari transaksi atau tanggal"
               value={q}
               onChange={(e) => {
                 setQ(e.target.value);
@@ -460,6 +468,7 @@ export default function Laporan() {
       </div>
 
       <BottomNav />
+    {confirmDialog}
     </div>
   );
 }

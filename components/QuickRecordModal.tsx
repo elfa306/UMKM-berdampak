@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import { X, ArrowDownLeft, ArrowUpRight, Check, ShoppingBag, Delete, Sparkles, Landmark } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { rupiah, todayISO } from '@/lib/accounting';
@@ -9,6 +8,7 @@ import { kaChing } from '@/lib/sound';
 import { ensureTodaySession, type QuickSavedDetail } from '@/lib/quickSession';
 import CavaLogo from './CavaLogo';
 import QrisCashier from './QrisCashier';
+import Modal from './Modal';
 
 type QuickRecordModalProps = {
   isOpen: boolean;
@@ -163,47 +163,29 @@ export default function QuickRecordModal({
     setErrMsg('');
   }, [isOpen, initialType, initialMetode]);
 
-  // Close on Escape
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    if (isOpen) window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
   return (
-    <AnimatePresence>
+    <>
       {isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-end justify-center sm:items-center p-0 sm:p-4">
-          {/* Backdrop */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 bg-[#103A57]/60 backdrop-blur-sm"
-          />
-
-          {/* Bottom Sheet Modal */}
-          <motion.div
-            initial={{ y: '100%', opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: '100%', opacity: 0 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-            className="relative w-full max-w-lg rounded-t-[28px] sm:rounded-[24px] bg-white p-5 sm:p-6 shadow-2xl max-h-[92vh] flex flex-col overflow-y-auto"
-          >
+        <Modal
+          variant="sheet"
+          lightDismiss
+          onClose={onClose}
+          labelledBy="catat-transaksi-title"
+          className="max-w-lg rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[24px] sm:p-6"
+        >
             {/* Grab Bar Header */}
             <div className="flex items-center justify-between pb-3">
               <div className="flex items-center gap-2">
                 <CavaLogo variant="mark" size="sm" />
                 <div>
-                  <h2 className="text-base font-extrabold tracking-tight text-[#103A57]">Catat transaksi</h2>
+                  <h2 id="catat-transaksi-title" className="text-base font-extrabold tracking-tight text-[#103A57]">Catat transaksi</h2>
                   <p className="text-[11px] font-semibold text-[#4F6B7C]">Pencatatan kas instan</p>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={onClose}
+                aria-label="Tutup"
                 className="grid h-9 w-9 place-items-center rounded-full bg-[#E3F0EA] text-[#103A57] hover:bg-[#CEE5D6] transition"
               >
                 <X size={18} />
@@ -282,6 +264,7 @@ export default function QuickRecordModal({
             {type === 'keluar' && (
               <div className="mt-3">
                 <select
+                  aria-label="Kategori pengeluaran"
                   value={kategoriBiaya}
                   onChange={(e) => setKategoriBiaya(e.target.value)}
                   className="w-full rounded-xl bg-white px-3 py-2.5 text-xs font-bold text-[#103A57]"
@@ -330,6 +313,7 @@ export default function QuickRecordModal({
             {/* Note Input */}
             <input
               type="text"
+              aria-label="Catatan transaksi"
               value={keterangan}
               onChange={(e) => setKeterangan(e.target.value)}
               placeholder={type === 'masuk' ? 'Catatan (opsional, mis. 2 Kopi Susu)' : type === 'keluar' ? 'Keterangan pengeluaran' : 'Catatan setoran modal (opsional)'}
@@ -381,9 +365,8 @@ export default function QuickRecordModal({
               </button>
             </div>
             </>)}
-          </motion.div>
-        </div>
+        </Modal>
       )}
-    </AnimatePresence>
+    </>
   );
 }

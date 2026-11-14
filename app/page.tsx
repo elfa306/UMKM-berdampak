@@ -45,8 +45,12 @@ export default function LandingPage() {
         className="flex flex-1 flex-col items-center justify-center pt-10"
       >
         <img
-          src="/cava-v-exact.png"
+          src="/cava-v-exact.webp"
           alt="CAVA"
+          width={432}
+          height={428}
+          fetchPriority="high"
+          decoding="async"
           draggable={false}
           className="h-auto w-[132px] object-contain sm:w-[150px]"
         />

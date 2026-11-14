@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useConfirm } from '@/components/ConfirmDialog';
 import Link from 'next/link';
 import {
   Activity,
@@ -74,6 +75,7 @@ function ActivityIcon({ activity }: { activity: DemoActivity }) {
 }
 
 export default function DemoDashboard({ session, snapshot, missionProgress, missions }: Props) {
+  const { confirm, confirmDialog } = useConfirm();
   const router = useRouter();
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState<'reset' | 'end' | null>(null);
@@ -111,7 +113,12 @@ export default function DemoDashboard({ session, snapshot, missionProgress, miss
     const confirmMessage = action === 'reset'
       ? 'Reset akan menghapus aktivitas sesi ini dan membuat ruang demo baru dengan data contoh awal. Lanjutkan?'
       : 'Akhiri sesi dan hapus seluruh data demonstrasi sesi ini?';
-    if (!window.confirm(confirmMessage)) return;
+    if (!(await confirm({
+      title: action === 'reset' ? 'Reset sesi demo?' : 'Akhiri sesi demo?',
+      message: confirmMessage,
+      confirmLabel: action === 'reset' ? 'Ya, reset' : 'Ya, akhiri',
+      tone: 'danger',
+    }))) return;
 
     setBusy(action);
     setError('');
@@ -144,7 +151,7 @@ export default function DemoDashboard({ session, snapshot, missionProgress, miss
   ];
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-7">
+    <main className="min-h-dvh bg-slate-50 px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-7">
       <div className="mx-auto max-w-7xl">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <Link href="/demo" className="font-black tracking-tight text-slate-900">UMKM <span className="text-emerald-600">Berdampak</span></Link>
@@ -412,6 +419,7 @@ export default function DemoDashboard({ session, snapshot, missionProgress, miss
           <span>Data contoh awal: {snapshot.seededOrderCount} transaksi · Aktivitas baru: {snapshot.realDemoOrderCount} transaksi</span>
         </footer>
       </div>
+    {confirmDialog}
     </main>
   );
 }

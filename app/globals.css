@@ -47,8 +47,12 @@ body {
   background: var(--cava-page);
   color: var(--cava-prussian);
   font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  /* Samakan ukuran visual font cadangan dengan Plus Jakarta Sans (x-height) agar teks tidak
+   * bergeser saat font web selesai dimuat. */
+  font-size-adjust: from-font;
   overflow-x: hidden;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 
@@ -881,4 +885,145 @@ input.loan-range::-moz-range-thumb {
 
 .btn-ghost:disabled {
   opacity: 0.45;
+}
+
+
+/* ---------------------------------------------------------------------
+ * Dialog modal native (<dialog> + showModal(), lihat components/Modal.tsx).
+ * Berada di layer "components" supaya kelas Tailwind (layer utilities) pada elemen
+ * dialog tetap bisa mengatur lebar maksimum, warna latar, sudut, dan padding panel.
+ * ------------------------------------------------------------------- */
+@layer components {
+  dialog.modal-dialog {
+    width: calc(100% - 2rem);
+    max-width: 32rem;
+    max-height: calc(100dvh - 2rem);
+    margin: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    overflow-y: auto;
+  }
+
+  /* Lembar bawah: menempel di dasar layar pada ponsel, di tengah pada layar lebar. */
+  dialog.modal-sheet {
+    width: 100%;
+    max-height: 92dvh;
+  }
+
+  @media (min-width: 640px) {
+    dialog.modal-sheet {
+      width: calc(100% - 2rem);
+      max-height: calc(100dvh - 2rem);
+    }
+  }
+
+  @media (max-width: 639.98px) {
+    dialog.modal-sheet {
+      margin: auto auto 0;
+    }
+  }
+
+  /* Cegah halaman di belakang ikut bergulir (tanpa menyentuh overflow html/body). */
+  dialog.modal-dialog:modal {
+    overscroll-behavior: contain;
+  }
+
+  dialog.modal-dialog::backdrop {
+    background-color: rgb(16 58 87 / 0);
+    overflow: hidden;
+    overscroll-behavior: contain;
+  }
+
+  /* Animasi masuk dan keluar untuk elemen top layer. */
+  dialog.modal-dialog {
+    opacity: 0;
+    transition-property: opacity, transform, display, overlay;
+    transition-duration: 0.25s;
+    transition-timing-function: ease-out;
+    /* Dipisah dari shorthand agar browser lama tidak membuang seluruh deklarasi transition. */
+    transition-behavior: allow-discrete;
+  }
+
+  dialog.modal-dialog::backdrop {
+    transition-property: background-color, display, overlay;
+    transition-duration: 0.25s;
+    transition-timing-function: ease-out;
+    transition-behavior: allow-discrete;
+  }
+
+  dialog.modal-dialog[open] {
+    opacity: 1;
+  }
+
+  dialog.modal-dialog[open]::backdrop {
+    background-color: rgb(16 58 87 / 0.6);
+  }
+
+  @starting-style {
+    dialog.modal-dialog[open] {
+      opacity: 0;
+    }
+
+    dialog.modal-dialog[open]::backdrop {
+      background-color: rgb(16 58 87 / 0);
+    }
+  }
+
+  /* Gerak (skala / geser) hanya untuk pengguna yang tidak meminta pengurangan gerak. */
+  @media (prefers-reduced-motion: no-preference) {
+    dialog.modal-dialog {
+      transform: scale(0.96);
+    }
+
+    dialog.modal-dialog[open] {
+      transform: none;
+    }
+
+    @starting-style {
+      dialog.modal-dialog[open] {
+        transform: scale(0.96);
+      }
+    }
+
+    @media (max-width: 639.98px) {
+      dialog.modal-sheet {
+        transform: translateY(2rem);
+      }
+
+      dialog.modal-sheet[open] {
+        transform: none;
+      }
+
+      @starting-style {
+        dialog.modal-sheet[open] {
+          transform: translateY(2rem);
+        }
+      }
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Validasi formulir: tanda visual baru muncul setelah pengguna berinteraksi (:user-invalid).
+ * aria-invalid diselaraskan dengan status ini oleh components/FormA11y.tsx.
+ * ------------------------------------------------------------------- */
+@layer base {
+  :is(input:not([type='checkbox'], [type='radio']), select, textarea):user-invalid {
+    box-shadow: 0 0 0 1.5px var(--cava-expense);
+  }
+}
+
+/* Menyembunyikan konten secara visual, tetap terbaca pembaca layar (live region FormA11y). */
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
 }

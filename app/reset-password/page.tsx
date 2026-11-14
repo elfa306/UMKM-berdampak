@@ -63,10 +63,10 @@ export default function ResetPassword() {
         <form className="glass-card" onSubmit={simpan}>
           <span className="label">Buat kata sandi baru</span>
           <div style={{ position: 'relative' }}>
-            <input name="baru" type={lihat ? 'text' : 'password'} autoComplete="new-password" placeholder="Kata sandi baru (min. 6 karakter)" minLength={6} required style={{ paddingRight: 64 }} />
+            <input name="baru" aria-label="Kata sandi baru" type={lihat ? 'text' : 'password'} autoComplete="new-password" placeholder="Kata sandi baru (min. 6 karakter)" minLength={6} required style={{ paddingRight: 64 }} />
             <button type="button" className="sound-btn" onClick={() => setLihat(!lihat)} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)' }}>{lihat ? 'Tutup' : 'Lihat'}</button>
           </div>
-          <input name="ulang" type={lihat ? 'text' : 'password'} autoComplete="new-password" placeholder="Ulangi kata sandi baru" minLength={6} required />
+          <input name="ulang" aria-label="Ulangi kata sandi baru" type={lihat ? 'text' : 'password'} autoComplete="new-password" placeholder="Ulangi kata sandi baru" minLength={6} required />
           <Press className="btn-main" disabled={proses}>{proses ? 'MENYIMPAN…' : 'SIMPAN KATA SANDI'}</Press>
           <Link href="/kasir" className="btn-soft" style={{ textAlign: 'center' }}>Batal</Link>
           {err && <p className="err">{err}</p>}

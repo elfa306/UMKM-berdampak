@@ -260,11 +260,11 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
   }
 
   if (loading) {
-    return <main className="min-h-screen bg-slate-50 px-4 py-12"><div className="mx-auto max-w-xl text-center text-sm text-slate-500">Memuat profil usaha…</div></main>;
+    return <main className="min-h-dvh bg-slate-50 px-4 py-12"><div className="mx-auto max-w-xl text-center text-sm text-slate-500">Memuat profil usaha…</div></main>;
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6 pb-12">
+    <main className="min-h-dvh bg-slate-50 px-4 py-6 pb-12">
       <div className="mx-auto grid max-w-2xl gap-5">
         <header className="flex items-start justify-between gap-3">
           <div>

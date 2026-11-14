@@ -41,7 +41,7 @@ export default async function DemoPreparationPage({ searchParams }: { searchPara
 
   if (!usaha || !mode) {
     return (
-      <main className="grid min-h-screen place-items-center bg-slate-50 px-4 py-10">
+      <main className="grid min-h-dvh place-items-center bg-slate-50 px-4 py-10">
         <section className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-7 text-center shadow-sm">
           <h1 className="text-xl font-black text-slate-900">Pilihan demo belum lengkap</h1>
           <p className="mt-2 text-sm leading-6 text-slate-500">Pilih jenis usaha dan cara mencoba terlebih dahulu.</p>
@@ -52,7 +52,7 @@ export default async function DemoPreparationPage({ searchParams }: { searchPara
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900 sm:px-6">
+    <main className="min-h-dvh bg-slate-50 px-4 py-8 text-slate-900 sm:px-6">
       <div className="mx-auto max-w-2xl">
         <Link href="/demo" className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-emerald-700"><ArrowLeft size={16} /> Ubah pilihan demo</Link>
         <section className="mt-5 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">

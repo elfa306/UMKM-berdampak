@@ -20,7 +20,7 @@ export function CavaVMark({ size, height, className = '', light = false }: CavaV
 
   return (
     <img
-      src="/cava-v-exact.png"
+      src="/cava-v-exact.webp"
       alt="CAVA V Emblem"
       width={numDim}
       height={numDim}
@@ -69,7 +69,7 @@ export function CavaLogo({
     return (
       <div className={`inline-flex flex-col items-center text-center select-none ${className}`}>
         <img
-          src="/cava-v-exact.png"
+          src="/cava-v-exact.webp"
           alt="CAVA V"
           width={logoHeight * 2}
           height={logoHeight * 2}
@@ -100,9 +100,11 @@ export function CavaLogo({
     <div className={`inline-flex flex-col items-start select-none ${className}`}>
       <div className="flex items-center">
         <img
-          src="/cava-logo-exact.png"
+          src="/cava-logo-exact.webp"
           alt="CAVA"
+          width={Math.round((logoHeight * 669) / 151)}
           height={logoHeight}
+          decoding="async"
           className="object-contain"
           style={{
             height: logoHeight,

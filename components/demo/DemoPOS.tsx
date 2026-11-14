@@ -8,6 +8,8 @@ import {
   Plus, Search, ShoppingBag, ShoppingCart, Trash2, X,
 } from 'lucide-react';
 import type { DemoPOSOrder, DemoPOSProduct } from '@/lib/demoPos.server';
+import Modal from '@/components/Modal';
+import { useConfirm } from '@/components/ConfirmDialog';
 import DemoQRCode from '@/components/demo/DemoQRCode';
 import DemoStaticQrisPanel from '@/components/demo/DemoStaticQrisPanel';
 
@@ -48,6 +50,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('Semua');
   const [showProductForm, setShowProductForm] = useState(false);
+  const { confirm, confirmDialog } = useConfirm();
   const [form, setForm] = useState<NewProductForm>(() => initialForm(businessType));
   const [busy, setBusy] = useState<'order' | 'settle' | 'cancel' | 'product' | 'simulate' | 'status' | null>(null);
   const [error, setError] = useState('');
@@ -154,8 +157,18 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
       setError('QRIS contoh hanya dapat diselesaikan melalui simulasi internal demo.');
       return;
     }
-    if (isCancel && !window.confirm(pendingOrder.paymentStatus === 'expired' || pendingOrder.paymentStatus === 'failed' ? 'Tutup panel invoice ini?' : 'Batalkan invoice yang masih menunggu pembayaran?')) return;
-    if (!isCancel && pendingOrder.method === 'cash' && !window.confirm('Pastikan uang tunai sudah diterima dari pelanggan. Konfirmasi pembayaran?')) return;
+    const invoiceClosed = pendingOrder.paymentStatus === 'expired' || pendingOrder.paymentStatus === 'failed';
+    if (isCancel && !(await confirm({
+      title: invoiceClosed ? 'Tutup panel invoice?' : 'Batalkan invoice?',
+      message: invoiceClosed ? 'Tutup panel invoice ini?' : 'Batalkan invoice yang masih menunggu pembayaran?',
+      confirmLabel: invoiceClosed ? 'Tutup panel' : 'Ya, batalkan',
+      tone: invoiceClosed ? 'default' : 'danger',
+    }))) return;
+    if (!isCancel && pendingOrder.method === 'cash' && !(await confirm({
+      title: 'Konfirmasi pembayaran tunai',
+      message: 'Pastikan uang tunai sudah diterima dari pelanggan. Konfirmasi pembayaran?',
+      confirmLabel: 'Ya, sudah diterima',
+    }))) return;
     if (isCancel && (pendingOrder.paymentStatus === 'expired' || pendingOrder.paymentStatus === 'failed')) {
       setPendingOrder(null);
       setNotice('Panel invoice ditutup. Status transaksi tetap tersimpan di riwayat.');
@@ -290,7 +303,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-7">
+    <main className="min-h-dvh bg-slate-50 px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-7">
       <div className="mx-auto max-w-7xl">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <Link href="/demo/ruang" className="inline-flex items-center gap-2 text-sm font-extrabold text-slate-700 hover:text-emerald-700"><ArrowLeft size={17} /> Kembali ke dashboard</Link>
@@ -321,7 +334,7 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cari produk atau SKU..." className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-9 pr-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
               </label>
-              <select value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold outline-none focus:border-emerald-500">
+              <select aria-label="Kategori produk" value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold outline-none focus:border-emerald-500">
                 {categories.map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
             </div>
@@ -509,14 +522,14 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
         {error && <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-700">{error}</p>}
 
         {showProductForm && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="new-product-title">
-            <form onSubmit={createProduct} className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-6">
+          <Modal variant="sheet" onClose={() => setShowProductForm(false)} labelledBy="new-product-title" className="max-w-xl rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-6">
+            <form onSubmit={createProduct}>
               <div className="flex items-start justify-between gap-3">
                 <div><h2 id="new-product-title" className="text-lg font-black">Tambah produk / layanan</h2><p className="mt-1 text-xs text-slate-500">Produk akan tersimpan hanya pada sesi demo ini.</p></div>
-                <button type="button" onClick={() => setShowProductForm(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-slate-100 text-slate-600"><X size={17} /></button>
+                <button type="button" onClick={() => setShowProductForm(false)} aria-label="Tutup" className="grid h-9 w-9 place-items-center rounded-xl bg-slate-100 text-slate-600"><X size={17} /></button>
               </div>
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1 text-xs font-bold text-slate-700 sm:col-span-2">Nama produk / layanan<input required minLength={2} maxLength={80} value={form.name} onChange={(event) => setForm((v) => ({ ...v, name: event.target.value }))} className="rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium outline-none focus:border-emerald-500" placeholder="Contoh: Teh manis" /></label>
+                <label className="grid gap-1 text-xs font-bold text-slate-700 sm:col-span-2">Nama produk / layanan<input data-autofocus required minLength={2} maxLength={80} value={form.name} onChange={(event) => setForm((v) => ({ ...v, name: event.target.value }))} className="rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium outline-none focus:border-emerald-500" placeholder="Contoh: Teh manis" /></label>
                 <label className="grid gap-1 text-xs font-bold text-slate-700">SKU (opsional)<input maxLength={32} value={form.sku} onChange={(event) => setForm((v) => ({ ...v, sku: event.target.value }))} className="rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium outline-none focus:border-emerald-500" placeholder="SKU-001" /></label>
                 <label className="grid gap-1 text-xs font-bold text-slate-700">Kategori<input maxLength={40} value={form.category} onChange={(event) => setForm((v) => ({ ...v, category: event.target.value }))} className="rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium outline-none focus:border-emerald-500" placeholder="Minuman" /></label>
                 <label className="grid gap-1 text-xs font-bold text-slate-700">Jenis<select value={form.itemType} onChange={(event) => setForm((v) => ({ ...v, itemType: event.target.value as NewProductForm['itemType'], stock: event.target.value === 'service' ? '0' : v.stock, minStock: event.target.value === 'service' ? '0' : v.minStock }))} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium outline-none focus:border-emerald-500"><option value="merchandise">Barang dagangan</option><option value="finished_good">Barang jadi</option><option value="service">Layanan</option></select></label>
@@ -533,9 +546,10 @@ export default function DemoPOS({ businessName, businessType, mode, initialSnaps
                 <button type="submit" disabled={busy === 'product'} className="rounded-xl bg-emerald-700 px-5 py-3 text-xs font-extrabold text-white hover:bg-emerald-800 disabled:opacity-50">{busy === 'product' ? 'Menyimpan...' : 'Simpan produk'}</button>
               </div>
             </form>
-          </div>
+          </Modal>
         )}
       </div>
+      {confirmDialog}
     </main>
   );
 }

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import BottomNav from '@/components/BottomNav';
+import { useConfirm } from '@/components/ConfirmDialog';
 
 const HEADER = 'x-webhook-token';
 const TIPE = 'application/json';
@@ -58,6 +59,7 @@ const Tanya = ({ q, children }: { q: string; children: ReactNode }) => (
 );
 
 export default function Integrasi() {
+  const { confirm, confirmDialog } = useConfirm();
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [aktif, setAktif] = useState(false);
@@ -116,7 +118,12 @@ export default function Integrasi() {
   }, [router, cekStatus]);
 
   async function buat() {
-    if (aktif && !confirm('Token lama akan berhenti berlaku dan MacroDroid harus diisi ulang dengan token baru. Lanjutkan?')) return;
+    if (aktif && !(await confirm({
+      title: 'Buat token baru?',
+      message: 'Token lama akan berhenti berlaku dan MacroDroid harus diisi ulang dengan token baru. Lanjutkan?',
+      confirmLabel: 'Ya, buat token baru',
+      tone: 'danger',
+    }))) return;
     setErr('');
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -324,6 +331,7 @@ export default function Integrasi() {
         </Tanya>
       </div>
       <BottomNav />
+    {confirmDialog}
     </div>
   );
 }

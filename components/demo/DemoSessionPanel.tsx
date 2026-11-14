@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useConfirm } from '@/components/ConfirmDialog';
 import { Clock3, Database, LogOut, Package, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
 
 type SessionInfo = {
@@ -22,6 +23,7 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export default function DemoSessionPanel({ session }: { session: SessionInfo }) {
+  const { confirm, confirmDialog } = useConfirm();
   const router = useRouter();
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState<'reset' | 'end' | null>(null);
@@ -44,7 +46,12 @@ export default function DemoSessionPanel({ session }: { session: SessionInfo }) 
     const confirmMessage = action === 'reset'
       ? 'Reset akan menghapus transaksi dan perubahan dalam sesi ini, lalu membuat data awal baru. Lanjutkan?'
       : 'Akhiri sesi dan hapus seluruh data demonstrasi sesi ini?';
-    if (!window.confirm(confirmMessage)) return;
+    if (!(await confirm({
+      title: action === 'reset' ? 'Reset sesi demo?' : 'Akhiri sesi demo?',
+      message: confirmMessage,
+      confirmLabel: action === 'reset' ? 'Ya, reset' : 'Ya, akhiri',
+      tone: 'danger',
+    }))) return;
 
     setBusy(action);
     setError('');
@@ -70,7 +77,7 @@ export default function DemoSessionPanel({ session }: { session: SessionInfo }) 
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-7 text-slate-900 sm:px-6">
+    <main className="min-h-dvh bg-slate-50 px-4 py-7 text-slate-900 sm:px-6">
       <div className="mx-auto max-w-3xl">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="font-black tracking-tight">UMKM <span className="text-emerald-600">Berdampak</span></div>
@@ -127,6 +134,7 @@ export default function DemoSessionPanel({ session }: { session: SessionInfo }) 
 
         <p className="mt-5 text-center text-[11px] leading-5 text-slate-400">ID sesi: {session.id} · Bukan data transaksi nyata.</p>
       </div>
+    {confirmDialog}
     </main>
   );
 }

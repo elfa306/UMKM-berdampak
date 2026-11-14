@@ -467,7 +467,7 @@ export default function RekomendasiModalPage() {
   }
 
   return (
-    <main className="min-h-screen">
+    <main className="min-h-dvh">
       <div className="mx-auto grid max-w-[480px] gap-4 px-4 pb-28 pt-5">
         <header className="flex items-start justify-between gap-3">
           <div>

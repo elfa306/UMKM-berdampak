@@ -106,7 +106,7 @@ export default function InteractiveDemoPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-8">
+    <main className="min-h-dvh bg-slate-50 px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-8">
       <div className="mx-auto max-w-6xl">
         <header className="mb-7 flex items-center justify-between gap-3">
           <Link href="/" className="inline-flex items-center gap-2 rounded-xl px-2 py-2 text-sm font-extrabold text-slate-800 transition hover:bg-white">

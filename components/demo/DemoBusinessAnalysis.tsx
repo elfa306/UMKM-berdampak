@@ -38,7 +38,7 @@ export default function DemoBusinessAnalysis({ businessName, businessType, snaps
     { label: 'Kas dan bank', value: IDR.format(bs.cash), icon: Wallet },
   ];
   return (
-    <main className="min-h-screen bg-slate-50 px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-7">
+    <main className="min-h-dvh bg-slate-50 px-4 pb-12 pt-5 text-slate-900 sm:px-6 sm:pt-7">
       <div className="mx-auto max-w-5xl">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <Link href="/demo/ruang" className="inline-flex items-center gap-2 text-sm font-bold text-slate-600"><ArrowLeft size={16}/>Dashboard demo</Link>

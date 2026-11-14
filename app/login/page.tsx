@@ -130,7 +130,7 @@ export default function Login() {
     return (
       <main className="flex min-h-[100svh] items-center justify-center bg-[#103A57] px-5">
         <div className="flex flex-col items-center gap-4 text-center">
-          <img src="/cava-v-exact.png" alt="CAVA" width={56} height={56} className="h-14 w-14 object-contain" draggable={false} />
+          <img src="/cava-v-exact.webp" alt="CAVA" width={56} height={56} className="h-14 w-14 object-contain" draggable={false} />
           <p className="text-xs font-semibold text-[#A9D3C5]">Memeriksa sesi akun…</p>
         </div>
       </main>
@@ -153,7 +153,7 @@ export default function Login() {
         >
           <ArrowLeft size={18} />
         </Link>
-        <img src="/cava-logo-exact.png" alt="CAVA" draggable={false} className="h-9 w-auto object-contain" />
+        <img src="/cava-logo-exact.webp" alt="CAVA" width={669} height={151} decoding="async" draggable={false} className="h-9 w-auto object-contain" />
       </header>
 
       {/* Lembar putih */}

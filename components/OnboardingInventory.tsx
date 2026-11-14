@@ -25,8 +25,8 @@ export default function OnboardingInventory(){
   setSaving(true);try{for(const r of list){const {error}=await supabase.rpc('create_inventory_product',{p_sku:null,p_name:r.name.trim(),p_category:'Umum',p_item_type:itemType,p_unit:r.unit.trim()||(itemType==='service'?'layanan':'pcs'),p_sale_price:Number(r.sale),p_unit_cost:Number(r.buy),p_stock:0,p_min_stock:0,p_track_stock:false});if(error)throw error;}router.replace('/kasir');router.refresh();}
   catch(e){setError(e instanceof Error?e.message:'Produk gagal disimpan.');}finally{setSaving(false);}
  }
- if(loading)return <main className="min-h-screen bg-slate-50 px-4 py-12"><div className="mx-auto max-w-xl text-center text-sm text-slate-500">{error||'Menyiapkan katalog produk...'}</div></main>;
- return <main className="min-h-screen bg-slate-50 px-4 py-6 pb-12"><div className="mx-auto grid max-w-2xl gap-5">
+ if(loading)return <main className="min-h-dvh bg-slate-50 px-4 py-12"><div className="mx-auto max-w-xl text-center text-sm text-slate-500">{error||'Menyiapkan katalog produk...'}</div></main>;
+ return <main className="min-h-dvh bg-slate-50 px-4 py-6 pb-12"><div className="mx-auto grid max-w-2xl gap-5">
   <header><p className="m-0 text-xs font-bold uppercase tracking-[.16em] text-emerald-700">CAVA · PENGATURAN AWAL</p><h1 className="mt-1 text-2xl font-extrabold tracking-tight text-slate-900">Daftarkan produk yang dijual</h1><p className="mt-1 max-w-xl text-sm leading-relaxed text-slate-600">Masukkan nama menu atau produk beserta harga beli dan harga jual. Tidak perlu jumlah stok.</p></header>
   {error&&<div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</div>}
   <form onSubmit={submit} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">

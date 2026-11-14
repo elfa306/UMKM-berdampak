@@ -372,22 +372,22 @@ export default function Harga() {
       <details className="glass-card">
         <summary style={{ fontWeight: 800, cursor: 'pointer' }}>🔍 Cari bahan lain</summary>
         <form onSubmit={cari} style={{ display: 'grid', gap: 10, marginTop: 12 }}>
-          <input name="q" placeholder="Mis. tepung terigu 1 kg, minyak goreng 2 liter" required />
+          <input name="q" aria-label="Cari bahan baku" placeholder="Mis. tepung terigu 1 kg, minyak goreng 2 liter" required />
           <button className="btn-main" disabled={mencari}>{mencari ? 'Mencari…' : 'CARI'}</button>
         </form>
         {items.length > 0 && (
           <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
-            <select value={urut} onChange={(e) => setUrut(e.target.value as 'harga' | 'rating' | 'ulasan')}>
+            <select aria-label="Urutkan hasil" value={urut} onChange={(e) => setUrut(e.target.value as 'harga' | 'rating' | 'ulasan')}>
               <option value="harga">Termurah</option>
               <option value="rating">Rating tertinggi</option>
               <option value="ulasan">Ulasan terbanyak</option>
             </select>
-            <select value={minRating} onChange={(e) => setMinRating(Number(e.target.value))}>
+            <select aria-label="Filter rating minimum" value={minRating} onChange={(e) => setMinRating(Number(e.target.value))}>
               <option value={0}>Semua rating</option>
               <option value={4}>Rating ≥ 4</option>
               <option value={4.5}>Rating ≥ 4,5</option>
             </select>
-            <input placeholder="Filter toko (mis. tokopedia)" value={toko} onChange={(e) => setToko(e.target.value)} />
+            <input aria-label="Filter toko" placeholder="Filter toko (mis. tokopedia)" value={toko} onChange={(e) => setToko(e.target.value)} />
             {tampil.map((i, n) => (
               <a key={n} className="trx" href={i.link ?? '#'} target="_blank" rel="noreferrer" style={{ borderLeftColor: '#2563eb' }}>
                 <div className="grow">

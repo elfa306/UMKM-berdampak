@@ -40,8 +40,12 @@ export default function CavaSplash() {
             className="relative z-10 -mt-10 flex flex-col items-center"
           >
             <img
-              src="/cava-v-exact.png"
+              src="/cava-v-exact.webp"
               alt="CAVA"
+              width={432}
+              height={428}
+              fetchPriority="high"
+              decoding="async"
               draggable={false}
               className="h-auto w-[132px] object-contain sm:w-[150px]"
             />

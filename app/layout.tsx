@@ -1,6 +1,7 @@
 import './globals.css';
 import BusinessProfileGate from '@/components/BusinessProfileGate';
 import CavaSplash from '@/components/CavaSplash';
+import FormA11y from '@/components/FormA11y';
 import type { ReactNode } from 'react';
 import type { Viewport } from 'next';
 
@@ -32,6 +33,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </head>
       <body className="bg-[#EEF5F1] text-[#103A57] antialiased">
+        <FormA11y />
         <CavaSplash />
         <BusinessProfileGate />
         {children}

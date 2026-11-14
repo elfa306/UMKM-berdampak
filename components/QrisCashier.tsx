@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import Modal from '@/components/Modal';
 import { supabase } from '@/lib/supabase';
 import { rupiah, todayISO } from '@/lib/accounting';
 import { kaChing } from '@/lib/sound';
@@ -395,7 +395,7 @@ export default function QrisCashier({
               <b className="text-sm text-[#103A57]">QRIS Statis · Tampil Langsung</b>
               <p className="mt-1 text-[11px] font-semibold text-[#4F6B7C]">Tanpa invoice. Pelanggan biasanya mengisi nominal sendiri.</p>
             </div>
-            <img src="/qris-contoh.png" alt="QRIS contoh statis yang tidak dapat menerima pembayaran" className="mx-auto mt-3 aspect-square w-full max-w-[230px] rounded-xl bg-white object-contain" />
+            <img src="/qris-contoh.png" alt="QRIS contoh statis yang tidak dapat menerima pembayaran" width={230} height={230} decoding="async" fetchPriority="low" className="mx-auto mt-3 aspect-square w-full max-w-[230px] rounded-xl bg-white object-contain" />
             <div className="mt-2 text-center text-sm font-extrabold tabular-nums text-[#103A57]">Total pilihan produk: {rupiah(cartTotal)}</div>
             <p className="note mt-2.5">Gambar ini hanya contoh visual dan tidak dapat menerima pembayaran. Tombol di bawah hanya membuat pencatatan simulasi, bukan bukti dana masuk.</p>
             <button type="button" onClick={() => mintaKonfirmasi('statis')} disabled={!cartLines.length || busy} className="btn-main mt-3 disabled:opacity-40">
@@ -430,7 +430,7 @@ export default function QrisCashier({
                 <strong className="tabular-nums">{rupiah(invoice.total)}</strong>
               </div>
             </div>
-            <img src="/qris-contoh.png" alt="QRIS dinamis contoh untuk tampilan invoice" className="mx-auto mt-3 aspect-square w-full max-w-[230px] rounded-xl bg-white object-contain" />
+            <img src="/qris-contoh.png" alt="QRIS dinamis contoh untuk tampilan invoice" width={230} height={230} decoding="async" fetchPriority="low" className="mx-auto mt-3 aspect-square w-full max-w-[230px] rounded-xl bg-white object-contain" />
             <p className="note mt-2.5">
               QR di atas tetap gambar contoh yang sama, bukan QR dinamis yang membawa nominal atau referensi invoice. Tombol konfirmasi hanya mencatat simulasi manual dan tidak memverifikasi dana dari bank atau GoPay Merchant.
             </p>
@@ -460,16 +460,13 @@ export default function QrisCashier({
         )}
       </div>
 
-      {confirmType &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[120] flex items-end justify-center bg-[#103A57]/60 p-0 sm:items-center sm:p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="qris-confirm-title"
-          >
-            <div className="w-full max-w-md rounded-t-[26px] bg-white p-5 shadow-2xl sm:rounded-[22px]">
+      {confirmType && (
+        <Modal
+          variant="sheet"
+          onClose={() => { if (!busy) setConfirmType(null); }}
+          labelledBy="qris-confirm-title"
+          className="max-w-md rounded-t-[26px] bg-white p-5 shadow-2xl sm:rounded-[22px]"
+        >
               <h2 id="qris-confirm-title" className="text-base font-extrabold text-[#103A57]">
                 Konfirmasi pembayaran QRIS
               </h2>
@@ -480,17 +477,15 @@ export default function QrisCashier({
               </p>
               <p className="note mt-3">Jangan gunakan tombol ini sebagai bukti pembayaran sungguhan. Untuk transaksi nyata, periksa dana di aplikasi merchant terlebih dahulu.</p>
               <div className="mt-4 grid grid-cols-2 gap-2.5">
-                <button type="button" disabled={busy} onClick={() => setConfirmType(null)} className="btn-ghost">
+                <button type="button" data-autofocus disabled={busy} onClick={() => setConfirmType(null)} className="btn-ghost">
                   Kembali
                 </button>
                 <button type="button" disabled={busy} onClick={konfirmasiDibayar} className="btn-main !w-full disabled:opacity-50">
                   {busy ? 'Menyimpan…' : 'Ya, catat simulasi'}
                 </button>
               </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+        </Modal>
+      )}
     </div>
   );
 }

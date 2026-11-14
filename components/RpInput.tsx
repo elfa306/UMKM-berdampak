@@ -1,8 +1,8 @@
 'use client';
-export default function RpInput({ name, placeholder }: { name: string; placeholder?: string }) {
+export default function RpInput({ name, placeholder, label }: { name: string; placeholder?: string; label?: string }) {
   return (
     <input
-      name={name} inputMode="numeric" placeholder={placeholder ?? 'Rp 0'} required
+      name={name} aria-label={label ?? 'Nominal (Rp)'} inputMode="numeric" placeholder={placeholder ?? 'Rp 0'} required
       onInput={(e) => {
         const el = e.currentTarget;
         const v = el.value.replace(/\D/g, '');
