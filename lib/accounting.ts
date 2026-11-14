@@ -26,7 +26,8 @@ export const todayISO = () => new Date().toLocaleDateString('en-CA', { timeZone:
  */
 export function summarize(modal: number, txs: Tx[]) {
   const sum = (f: (t: Tx) => boolean) => txs.filter(f).reduce((a, t) => a + t.jumlah, 0);
-  const tunai = sum((t) => t.jenis === 'penjualan' && t.metode === 'tunai');
+  // Metode kosong (mis. dari asisten suara) diperlakukan sebagai tunai, sama seperti trigger akuntansi di database.
+  const tunai = sum((t) => t.jenis === 'penjualan' && t.metode !== 'qris');
   const qris = sum((t) => t.jenis === 'penjualan' && t.metode === 'qris');
   const pendapatan = tunai + qris;
   const hpp = modal;

@@ -409,6 +409,14 @@ export async function generateAssistantReply(
     return [];
   });
 
+  // Jangan biarkan AI mengaku sudah mencatat bila tidak ada aksi valid yang bisa dijalankan.
+  const NOT_SAVED_REPLY = 'Belum ada yang tersimpan. Sebutkan jenis, keterangan, dan nominalnya dengan jelas, lalu coba lagi.';
+  const claimsDone = /\bsaya\s+(sudah\s+)?(catat|simpan|hapus|batalkan|tambah|ubah)|\b(berhasil|sudah)\s+(saya\s+)?(di)?(catat|simpan|hapus|batalkan)/i.test(reply);
+  if ((rawActions.length > 0 && actions.length === 0) || (rawActions.length === 0 && claimsDone)) {
+    if (rawActions.length > 0) console.warn('[CAVA AI] semua aksi dibuang karena tidak valid:', JSON.stringify(rawActions).slice(0, 300));
+    reply = NOT_SAVED_REPLY;
+  }
+
   // Keep each voice turn atomic: transactions may be batched together, but other
   // action categories must never be mixed or silently prioritized on the client.
   const categoryOf = (action: AssistantAction): string => {

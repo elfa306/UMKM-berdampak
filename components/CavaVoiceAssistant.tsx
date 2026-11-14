@@ -69,8 +69,8 @@ function confirmationChoice(raw: string): 'yes' | 'no' | 'unclear' {
   const words = normalized.split(' ');
   const negativeLead = new Set(['tidak', 'enggak', 'nggak', 'ngga', 'gak', 'ga', 'ndak', 'batal', 'batalkan', 'jangan', 'belum', 'nanti', 'no']);
   const negativeTail = new Set(['saya', 'mau', 'usah', 'perlu', 'dulu', 'saja', 'aja', 'dicatat', 'disimpan', 'catat', 'simpan', 'lanjut', 'lanjutkan', 'sekarang', 'lagi', 'jadi', 'ya', 'iya', 'hapus', 'tambahkan', 'ubah', 'perbarui', 'jalankan']);
-  const positiveLead = new Set(['ya', 'iya', 'iyah', 'oke', 'ok', 'setuju', 'boleh', 'lanjut', 'lanjutkan', 'silakan', 'benar', 'betul', 'tentu', 'gas', 'sip', 'yes', 'catat', 'simpan', 'langsung']);
-  const positiveTail = new Set(['saya', 'mau', 'catat', 'dicatat', 'simpan', 'disimpan', 'langsung', 'sekarang', 'saja', 'aja', 'tolong', 'ya', 'iya', 'benar', 'betul', 'itu', 'hapus', 'tambahkan', 'ubah', 'perbarui', 'jalankan', 'lakukan', 'lanjutkan', 'proses', 'produksi', 'buat', 'simpan', 'mulai']);
+  const positiveLead = new Set(['yaa', 'iyaa', 'yoi', 'siap', 'baik', 'tolong', 'ya', 'iya', 'iyah', 'oke', 'ok', 'setuju', 'boleh', 'lanjut', 'lanjutkan', 'silakan', 'benar', 'betul', 'tentu', 'gas', 'sip', 'yes', 'catat', 'simpan', 'langsung']);
+  const positiveTail = new Set(['banget', 'dong', 'deh', 'sih', 'nih', 'yuk', 'ayo', 'bisa', 'udah', 'sudah', 'tepat', 'sesuai', 'pengeluaran', 'pengeluarannya', 'pemasukan', 'pemasukannya', 'penjualan', 'penjualannya', 'transaksi', 'transaksinya', 'saya', 'mau', 'catat', 'dicatat', 'simpan', 'disimpan', 'langsung', 'sekarang', 'saja', 'aja', 'tolong', 'ya', 'iya', 'benar', 'betul', 'itu', 'hapus', 'tambahkan', 'ubah', 'perbarui', 'jalankan', 'lakukan', 'lanjutkan', 'proses', 'produksi', 'buat', 'simpan', 'mulai']);
 
   if (negativeLead.has(words[0]) && words.length <= 6 && words.slice(1).every((word) => negativeLead.has(word) || negativeTail.has(word))) return 'no';
   if (positiveLead.has(words[0]) && words.length <= 6 && words.slice(1).every((word) => positiveTail.has(word) || positiveLead.has(word))) return 'yes';
@@ -537,6 +537,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
       if (!response.ok) throw new Error(body?.error || 'Perubahan belum berhasil dijalankan.');
       const successText = body?.message || 'Perubahan berhasil dijalankan.';
       setPendingItems([]);
+      announceTransactionSaved(); // muat ulang Beranda agar saldo dan ringkasan sinkron
       const assistantMessage: Message = { id: crypto.randomUUID(), role: 'assistant', content: successText };
       historyRef.current = [...historyRef.current, assistantMessage].slice(-12);
       showResponse(successText, 'success');
