@@ -22,7 +22,7 @@ type PendingTransaction = {
 };
 type PendingTransactionDelete = { type: 'transaction_delete'; transaction_id: string; description: string; amount: number; date: string; jenis: 'penjualan' | 'biaya' };
 type PendingOpeningBalanceSetup = { type: 'opening_balance_setup'; cash_amount: number; bank_amount: number };
-type PendingStartDailySession = { type: 'start_daily_session'; date: string };
+type PendingStartDailySession = { type: 'start_daily_session'; date: string; modal_harian: number };
 type PendingDailyModalSet = { type: 'daily_modal_set'; amount: number; date: string };
 type PendingProductCreate = { type: 'product_create'; nama: string; sku: string | null; kategori: string; jenis_item: 'merchandise' | 'raw_material' | 'work_in_progress' | 'finished_good' | 'service'; satuan: string; harga: number; harga_pokok: number };
 type PendingProductUpdate = { type: 'product_update'; product_id: string; product_name: string; changes: Partial<{ nama: string; sku: string | null; kategori: string; jenis_item: 'merchandise' | 'finished_good' | 'service'; satuan: string; harga: number; harga_pokok: number }> };
@@ -109,7 +109,7 @@ function actionConfirmation(actions: PendingAction[]): string {
   if (action.type === 'transaction_delete') return `Saya akan membatalkan transaksi ${action.jenis === 'biaya' ? 'pengeluaran' : 'penjualan'} ${action.description} sebesar ${rupiah(action.amount)} tanggal ${action.date}. Jika transaksi berasal dari kasir, pembatalan juga menyesuaikan stok atau pembayaran terkait. Apakah saya lanjutkan?`;
   if (action.type === 'opening_balance_setup') return `Saya akan menetapkan saldo awal satu kali: kas ${rupiah(action.cash_amount)} dan bank/QRIS ${rupiah(action.bank_amount)}. Setelah disimpan, saldo awal tidak dapat diatur ulang melalui Cashie. Boleh saya simpan?`;
   if (action.type === 'daily_modal_set') return `Saya akan menyimpan modal harian ${rupiah(action.amount)} untuk ${action.date}. Ini hanya alokasi harian dan tidak menambah saldo kas atau bank. Boleh saya simpan?`;
-  if (action.type === 'start_daily_session') return `Saya akan membuka aktivitas harian tanggal ${action.date} menggunakan saldo awal usaha yang tersimpan. Boleh saya buka?`;
+  if (action.type === 'start_daily_session') return `Saya akan membuka aktivitas harian tanggal ${action.date} dengan modal harian ${rupiah(action.modal_harian)}. Boleh saya mulai?`;
   if (action.type === 'product_create') {
     const kind = action.jenis_item === 'raw_material' ? 'bahan baku' : action.jenis_item === 'work_in_progress' ? 'barang dalam proses' : action.jenis_item === 'service' ? 'jasa' : action.jenis_item === 'finished_good' ? 'produk sendiri' : 'barang dagangan';
     const stockNote = action.jenis_item === 'raw_material' || action.jenis_item === 'work_in_progress' ? ' Pelacakan stok akan diaktifkan.' : '';

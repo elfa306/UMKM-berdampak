@@ -113,6 +113,9 @@ export async function POST(request: Request) {
       const item = action as StartDailySessionAction;
       const todayJakarta = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
       if (item.date !== todayJakarta) return NextResponse.json({ error: 'Tanggal perintah sudah berubah. Ulangi permintaan untuk tanggal hari ini.' }, { status: 409 });
+      if (!Number.isSafeInteger(item.modal_harian) || item.modal_harian < 0 || item.modal_harian > 100_000_000_000) {
+        return NextResponse.json({ error: 'Nominal modal harian tidak valid. Sebutkan jumlahnya sebelum membuka aktivitas.' }, { status: 400 });
+      }
       const { data: opening, error: openingError } = await ctx.userClient.from('business_opening_balances')
         .select('user_id').eq('user_id', ctx.user.id).maybeSingle();
       if (openingError) throw new Error('Saldo awal usaha belum dapat diverifikasi.');
@@ -122,10 +125,10 @@ export async function POST(request: Request) {
       if (currentError) throw new Error('Status aktivitas harian belum dapat diperiksa.');
       if (current) return NextResponse.json({ ok: true, message: 'Aktivitas harian hari ini memang sudah terbuka.' }, { headers: { 'Cache-Control': 'no-store' } });
       const { data, error } = await ctx.userClient.from('daily_sessions')
-        .insert({ user_id: ctx.user.id, tanggal: todayJakarta, modal_harian: 0 }).select('id').single();
+        .insert({ user_id: ctx.user.id, tanggal: todayJakarta, modal_harian: item.modal_harian }).select('id').single();
       if (error?.code === '23505') return NextResponse.json({ ok: true, message: 'Aktivitas harian hari ini sudah terbuka.' }, { headers: { 'Cache-Control': 'no-store' } });
       if (error || !data) throw new Error('Aktivitas harian gagal dibuka. Pastikan migration v17 sudah dijalankan.');
-      return NextResponse.json({ ok: true, message: `Aktivitas harian ${todayJakarta} berhasil dibuka.` }, { headers: { 'Cache-Control': 'no-store' } });
+      return NextResponse.json({ ok: true, message: `Aktivitas harian ${todayJakarta} berhasil dibuka dengan modal harian ${rupiahLabel(item.modal_harian)}.` }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
 

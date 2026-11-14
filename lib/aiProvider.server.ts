@@ -40,7 +40,7 @@ export type ProfileUpdateAction = { type: 'profile_update'; changes: Partial<{
 export type AccountingEntryAction = { type: 'accounting_entry'; kind: 'capital' | 'draw' | 'supplier_payment' | 'labor_payment' | 'overhead_payment'; amount: number; description: string; payment_account: '1000' | '1010' };
 export type TransactionDeleteAction = { type: 'transaction_delete'; transaction_id: string; description: string; amount: number; date: string; jenis: 'penjualan' | 'biaya' };
 export type OpeningBalanceSetupAction = { type: 'opening_balance_setup'; cash_amount: number; bank_amount: number };
-export type StartDailySessionAction = { type: 'start_daily_session'; date: string };
+export type StartDailySessionAction = { type: 'start_daily_session'; date: string; modal_harian: number };
 export type DailyModalSetAction = { type: 'daily_modal_set'; amount: number; date: string };
 export type AccountingReportExportAction = { type: 'accounting_report_export'; month: string };
 // Semua tindakan terkonfirmasi ditandatangani server dan hanya dapat dieksekusi satu kali.
@@ -408,10 +408,11 @@ export async function generateAssistantReply(
     }
     if (action.type === 'start_daily_session') {
       const date = action.date;
-      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+      const modalHarian = Number(action.modal_harian);
+      if (!validPrice(modalHarian, true) || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
       const parsedDate = new Date(`${date}T00:00:00Z`);
       if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) return [];
-      return [{ type: 'start_daily_session', date }];
+      return [{ type: 'start_daily_session', date, modal_harian: modalHarian }];
     }
     if (action.type === 'accounting_report_export') {
       const month = action.month;
