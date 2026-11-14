@@ -60,7 +60,9 @@ export default function Kasir() {
   const [ringkasanHarian, setRingkasanHarian] = useState<RingkasanKeuanganHarian>({ pendapatan: 0, hpp: 0, beban: 0 });
   const [saldoKasInput, setSaldoKasInput] = useState('0');
   const [saldoBankInput, setSaldoBankInput] = useState('0');
+  const [modalHarianInput, setModalHarianInput] = useState('');
   const saldoAwalInputDiubah = useRef(false);
+  const modalHarianInputDiubah = useRef(false);
 
   // New CAVA UI states
   const [sembunyikanNominal, setSembunyikanNominal] = useState(false);
@@ -92,6 +94,7 @@ export default function Kasir() {
       setSaldoAwalTersimpan(true);
       setSaldoAwal({ kas: 0, bank: 0 });
       setSaldoSaatIni({ kas: 0, bank: 0 });
+      setModalHarianInput('');
       setRingkasanHarian({ pendapatan: 0, hpp: 0, beban: 0 });
       setNamaUsaha('Mode Tamu');
       setProducts([
@@ -164,10 +167,12 @@ export default function Kasir() {
     if (s.data) {
       const sesiHariIni = { id: s.data.id, modal_harian: Number(s.data.modal_harian) };
       setSesi(sesiHariIni);
+      if (!modalHarianInputDiubah.current) {
+        setModalHarianInput(sesiHariIni.modal_harian > 0 ? String(sesiHariIni.modal_harian) : '');
+      }
 
-      // Modal_harian dipertahankan hanya untuk kompatibilitas catatan lama.
-      // Sesi baru bernilai Rp0 karena saldo awal dihitung dari jurnal kas dan bank.
-      await importQris(s.data.id);
+      // Notifikasi QRIS baru diproses setelah modal harian dikonfirmasi.
+      if (sesiHariIni.modal_harian > 0) await importQris(s.data.id);
       const [t, pending, saldoSetelahImport] = await Promise.all([
         supabase.from('transactions').select('*').eq('user_id', user.id).eq('session_id', s.data.id).order('created_at'),
         supabase.from('qris_invoice_drafts').select('invoice_no,total').eq('session_id', s.data.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle(),
@@ -192,6 +197,7 @@ export default function Kasir() {
     } else {
       setSesi(null);
       setTxs([]);
+      if (!modalHarianInputDiubah.current) setModalHarianInput('');
       publishActiveInvoice(null);
     }
     setReady(true);
@@ -282,7 +288,7 @@ export default function Kasir() {
 
   const status = useQrisRealtime(userId, {
     onQrisMasuk: tampilkanQris,
-    onInboxBaru: (m) => { if (!sesiRef.current) { kaChing(); info(`💰 QRIS ${rupiah(Number(m.jumlah))} masuk. Sesi harian belum dimulai.`); } },
+    onInboxBaru: (m) => { if (!sesiRef.current || sesiRef.current.modal_harian <= 0) { kaChing(); info(`💰 QRIS ${rupiah(Number(m.jumlah))} masuk. Modal harian belum dikonfirmasi.`); } },
     onTersambung: () => { if (sesiRef.current) load(); },
   });
 
@@ -297,6 +303,11 @@ export default function Kasir() {
       const { data: authData, error: authError } = await supabase.auth.getUser();
       const user = authData.user;
       if (authError || !user) throw new Error('Sesi login tidak ditemukan. Silakan masuk kembali.');
+
+      const modalHarian = angka(form.get('modalHarian'));
+      if (!Number.isSafeInteger(modalHarian) || modalHarian <= 0 || modalHarian > 100_000_000_000) {
+        throw new Error('Masukkan modal harian yang valid dan lebih besar dari Rp0.');
+      }
 
       if (saldoAwalTersimpan !== true) {
         const kas = angka(form.get('saldoKas'));
@@ -325,7 +336,7 @@ export default function Kasir() {
       if (!sesiBaru) {
         const { data, error } = await supabase
           .from('daily_sessions')
-          .insert({ user_id: user.id, tanggal, modal_harian: 0 })
+          .insert({ user_id: user.id, tanggal, modal_harian: modalHarian })
           .select('id,modal_harian')
           .single();
 
@@ -345,7 +356,33 @@ export default function Kasir() {
       }
 
       if (!sesiBaru) throw new Error('Sesi harian gagal dibuka.');
+      if (Number(sesiBaru.modal_harian) <= 0) {
+        const { data: diperbarui, error: updateError } = await supabase
+          .from('daily_sessions')
+          .update({ modal_harian: modalHarian })
+          .eq('id', sesiBaru.id)
+          .eq('user_id', user.id)
+          .eq('modal_harian', 0)
+          .select('id,modal_harian')
+          .maybeSingle();
+        if (updateError) throw updateError;
+        if (diperbarui) {
+          sesiBaru = diperbarui;
+        } else {
+          const { data: existing, error: existingError } = await supabase
+            .from('daily_sessions')
+            .select('id,modal_harian')
+            .eq('id', sesiBaru.id)
+            .eq('user_id', user.id)
+            .single();
+          if (existingError || !existing || Number(existing.modal_harian) <= 0) {
+            throw new Error('Modal harian gagal disimpan. Muat ulang halaman lalu coba lagi.');
+          }
+          sesiBaru = existing;
+        }
+      }
       setSesi({ id: sesiBaru.id, modal_harian: Number(sesiBaru.modal_harian) });
+      modalHarianInputDiubah.current = false;
       await load();
     } catch (error) {
       setErr(error instanceof Error ? error.message : 'Gagal membuka aktivitas harian. Coba lagi.');
@@ -355,10 +392,10 @@ export default function Kasir() {
   }
 
   async function catat(row: { jenis: 'penjualan' | 'biaya'; keterangan: string; jumlah: number; metode: 'tunai' | 'qris' | null }, productId?: string) {
-    let sesiAktif = sesi;
+    let sesiAktif = sesi && sesi.modal_harian > 0 ? sesi : null;
     if (!sesiAktif && userId && userId !== 'guest') {
       const id = await ensureTodaySession(tanggal);
-      if (!id) return setErr('Buka aktivitas harian dari Beranda setelah saldo awal usaha dikonfirmasi.');
+      if (!id) return setErr('Buka Beranda CAVA dan masukkan modal harian sebelum mencatat transaksi.');
       const { data: sesiTersimpan, error: sesiError } = await supabase
         .from('daily_sessions')
         .select('id,modal_harian')
@@ -477,7 +514,7 @@ export default function Kasir() {
     );
   }
 
-  if (userId && userId !== 'guest' && (saldoAwalTersimpan !== true || !sesi)) {
+  if (userId && userId !== 'guest' && (saldoAwalTersimpan !== true || !sesi || sesi.modal_harian <= 0)) {
     const perluSaldoAwal = saldoAwalTersimpan !== true;
     return (
       <main className="min-h-[100svh] bg-[#F2F6F3] px-4 py-8 text-[#103A57] sm:px-6">
@@ -491,12 +528,12 @@ export default function Kasir() {
                 {perluSaldoAwal ? 'Pengaturan awal usaha' : 'Aktivitas harian'}
               </p>
               <h1 className="mt-2 text-2xl font-black tracking-tight">
-                {perluSaldoAwal ? 'Siapkan saldo awal usaha' : 'Mulai hari dengan CAVA'}
+                {perluSaldoAwal ? 'Siapkan saldo awal usaha' : 'Masukkan modal hari ini'}
               </h1>
               <p className="mt-2 text-sm leading-6 text-slate-500">
                 {perluSaldoAwal
                   ? 'Masukkan saldo uang yang benar-benar tersedia saat ini. Pengaturan ini hanya dilakukan satu kali; saldo akan dicocokkan dengan pembukuan tanpa menghapus riwayat transaksi.'
-                  : 'Saldo awal hari ini otomatis dibawa dari penutupan hari sebelumnya. Tidak perlu menyetor modal baru untuk mulai berjualan.'}
+                  : 'Saldo kas dan bank tetap mengikuti catatan hari sebelumnya. Masukkan modal untuk kegiatan usaha pada tanggal hari ini.'}
               </p>
             </div>
 
@@ -549,6 +586,24 @@ export default function Kasir() {
               </div>
             )}
 
+            <label className="mt-4 block">
+              <span className="block text-sm font-bold text-[#103A57]">Modal harian (Rp)</span>
+              <span className="mt-1 block text-[11px] leading-5 text-slate-500">Masukkan modal untuk kegiatan usaha hari ini. Nilai ini wajib diisi ulang setiap hari dan tidak otomatis disalin dari hari sebelumnya.</span>
+              <input
+                name="modalHarian"
+                type="number"
+                min="1"
+                max="100000000000"
+                required
+                step="1"
+                inputMode="numeric"
+                value={modalHarianInput}
+                onChange={(event) => { modalHarianInputDiubah.current = true; setModalHarianInput(event.target.value); }}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-extrabold tabular-nums text-[#103A57] outline-none focus:border-[#307B8E] focus:bg-white"
+              />
+              <span className="mt-1 block text-[11px] leading-5 text-slate-500">Catatan ini dipakai untuk ringkasan laba harian; bukan saldo uang masuk atau setoran modal pemilik di neraca.</span>
+            </label>
+
             {err && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-semibold leading-5 text-red-700">{err}</p>}
 
             <button
@@ -558,10 +613,10 @@ export default function Kasir() {
             >
               {menyimpanModal
                 ? 'Menyimpan…'
-                : perluSaldoAwal ? 'Simpan saldo awal & mulai' : 'Mulai aktivitas hari ini'}
+                : perluSaldoAwal ? 'Simpan saldo awal & modal hari ini' : 'Simpan modal & mulai hari ini'}
             </button>
             <p className="mt-4 text-center text-[11px] leading-5 text-slate-400">
-              Setelah sesi hari ini dibuka, CAVA akan langsung membawa kamu ke dashboard tanpa meminta modal lagi.
+              Modal harian harus diisi ulang setiap tanggal. Saldo kas dan bank tetap mengikuti catatan transaksi; untuk setoran uang baru dari pemilik, gunakan Catat Transaksi → Setor modal.
             </p>
           </form>
         </div>

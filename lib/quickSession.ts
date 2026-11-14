@@ -46,7 +46,7 @@ export async function ensureTodaySession(tanggal: string): Promise<string | null
   const user = authData.user;
   if (authError || !user) return null;
 
-  // Sebelum ada sesi harian, pemilik harus lebih dulu mengonfirmasi saldo awal usaha.
+  // Transaksi hanya dapat dicatat setelah saldo awal usaha dan modal harian tanggal ini disiapkan.
   const { data: opening, error: openingError } = await supabase
     .from('business_opening_balances')
     .select('user_id')
@@ -61,7 +61,7 @@ export async function ensureTodaySession(tanggal: string): Promise<string | null
 
   const { data: existing, error } = await supabase
     .from('daily_sessions')
-    .select('id')
+    .select('id,modal_harian')
     .eq('user_id', user.id)
     .eq('tanggal', tanggal)
     .maybeSingle();
@@ -70,5 +70,5 @@ export async function ensureTodaySession(tanggal: string): Promise<string | null
     console.error('Gagal memeriksa sesi harian:', error.message);
     return null;
   }
-  return existing?.id ?? null;
+  return existing && Number(existing.modal_harian) > 0 ? existing.id : null;
 }
