@@ -218,7 +218,13 @@ async function deepseekChat(system: string, history: ChatTurn[], message: string
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
-    console.warn(`[CAVA AI] DeepSeek HTTP ${response.status}:`, detail.slice(0, 300));
+    console.warn(`[CAVA AI] DeepSeek HTTP ${response.status}:`, detail.slice(0, 500));
+    if (response.status === 402) {
+      throw new ProviderError('Saldo API DeepSeek tidak mencukupi. Periksa saldo akun DeepSeek Platform; angka Usage 0 tidak menunjukkan bahwa saldo masih tersedia.', 402);
+    }
+    if (response.status === 401) {
+      throw new ProviderError('API key DeepSeek tidak valid atau sudah dinonaktifkan. Periksa DEEPSEEK_API_KEY di Vercel.', 401);
+    }
     throw new ProviderError(`DeepSeek mengembalikan HTTP ${response.status}.`, response.status);
   }
 

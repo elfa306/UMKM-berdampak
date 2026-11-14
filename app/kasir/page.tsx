@@ -60,6 +60,7 @@ export default function Kasir() {
   const [ringkasanHarian, setRingkasanHarian] = useState<RingkasanKeuanganHarian>({ pendapatan: 0, hpp: 0, beban: 0 });
   const [saldoKasInput, setSaldoKasInput] = useState('0');
   const [saldoBankInput, setSaldoBankInput] = useState('0');
+  const [modalHarianInput, setModalHarianInput] = useState('0');
   const saldoAwalInputDiubah = useRef(false);
 
   // New CAVA UI states
@@ -298,6 +299,12 @@ export default function Kasir() {
       const user = authData.user;
       if (authError || !user) throw new Error('Sesi login tidak ditemukan. Silakan masuk kembali.');
 
+      const modalHarianText = String(form.get('modalHarian') ?? '').trim();
+      const modalHarian = modalHarianText === '' ? NaN : Number(modalHarianText);
+      if (!Number.isSafeInteger(modalHarian) || modalHarian < 0) {
+        throw new Error('Masukkan modal harian berupa bilangan bulat yang tidak negatif. Nilai Rp0 diperbolehkan.');
+      }
+
       if (saldoAwalTersimpan !== true) {
         const kas = angka(form.get('saldoKas'));
         const bank = angka(form.get('saldoBank'));
@@ -325,7 +332,7 @@ export default function Kasir() {
       if (!sesiBaru) {
         const { data, error } = await supabase
           .from('daily_sessions')
-          .insert({ user_id: user.id, tanggal, modal_harian: 0 })
+          .insert({ user_id: user.id, tanggal, modal_harian: modalHarian })
           .select('id,modal_harian')
           .single();
 
@@ -548,6 +555,24 @@ export default function Kasir() {
                 </p>
               </div>
             )}
+
+            <label className="mt-4 block">
+              <span className="block text-sm font-bold text-[#103A57]">Modal harian</span>
+              <span className="mt-1 block text-[11px] leading-5 text-slate-500">
+                Masukkan modal yang dialokasikan untuk kegiatan usaha hari ini. Nilai ini dicatat per tanggal; saldo kas dan bank tetap terbawa otomatis.
+              </span>
+              <input
+                name="modalHarian"
+                type="number"
+                min="0"
+                step="1"
+                required
+                inputMode="numeric"
+                value={modalHarianInput}
+                onChange={(event) => setModalHarianInput(event.target.value)}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-extrabold tabular-nums text-[#103A57] outline-none focus:border-[#307B8E] focus:bg-white"
+              />
+            </label>
 
             {err && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-semibold leading-5 text-red-700">{err}</p>}
 

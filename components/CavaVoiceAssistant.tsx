@@ -11,7 +11,7 @@ import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from
 import { todayISO, rupiah } from '@/lib/accounting';
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'thinking';
-type Message = { id: string; role: 'user' | 'assistant'; content: string; provider?: 'groq' | 'gemini' };
+type Message = { id: string; role: 'user' | 'assistant'; content: string; provider?: 'groq' | 'gemini' | 'deepseek' };
 type PendingTransaction = {
   type: 'transaction';
   jenis: 'penjualan' | 'biaya';
@@ -41,7 +41,7 @@ type SpeechAlignment = {
 type SpeechCue = { display: string; start: number; end: number };
 type CachedSpeech = { buffer: AudioBuffer; cues: SpeechCue[] };
 type SpeechProgress = { text: string; visibleCount: number; activeIndex: number };
-type Props = { variant?: 'mobile' | 'desktop'; onManualRecord: (mode?: 'masuk' | 'keluar' | 'modal') => void };
+type Props = { variant?: 'mobile' | 'desktop' | 'global'; controlsVisible?: boolean; onManualRecord: (mode?: 'masuk' | 'keluar' | 'modal') => void };
 
 const MAX_RECORDING_MS = 35_000;
 const WAVEFORM_BAR_COUNT = 32;
@@ -67,13 +67,18 @@ function confirmationChoice(raw: string): 'yes' | 'no' | 'unclear' {
   if (!normalized) return 'unclear';
 
   const words = normalized.split(' ');
-  const negativeLead = new Set(['tidak', 'enggak', 'nggak', 'ngga', 'gak', 'ga', 'ndak', 'batal', 'batalkan', 'jangan', 'belum', 'nanti', 'no']);
-  const negativeTail = new Set(['saya', 'mau', 'usah', 'perlu', 'dulu', 'saja', 'aja', 'dicatat', 'disimpan', 'catat', 'simpan', 'lanjut', 'lanjutkan', 'sekarang', 'lagi', 'jadi', 'ya', 'iya', 'hapus', 'tambahkan', 'ubah', 'perbarui', 'jalankan']);
-  const positiveLead = new Set(['yaa', 'iyaa', 'yoi', 'siap', 'baik', 'tolong', 'ya', 'iya', 'iyah', 'oke', 'ok', 'setuju', 'boleh', 'lanjut', 'lanjutkan', 'silakan', 'benar', 'betul', 'tentu', 'gas', 'sip', 'yes', 'catat', 'simpan', 'langsung']);
-  const positiveTail = new Set(['banget', 'dong', 'deh', 'sih', 'nih', 'yuk', 'ayo', 'bisa', 'udah', 'sudah', 'tepat', 'sesuai', 'pengeluaran', 'pengeluarannya', 'pemasukan', 'pemasukannya', 'penjualan', 'penjualannya', 'transaksi', 'transaksinya', 'saya', 'mau', 'catat', 'dicatat', 'simpan', 'disimpan', 'langsung', 'sekarang', 'saja', 'aja', 'tolong', 'ya', 'iya', 'benar', 'betul', 'itu', 'hapus', 'tambahkan', 'ubah', 'perbarui', 'jalankan', 'lakukan', 'lanjutkan', 'proses', 'produksi', 'buat', 'simpan', 'mulai']);
+  // Penolakan eksplisit selalu didahulukan, termasuk "ya, tapi jangan dulu".
+  const negativeWords = new Set(['tidak', 'enggak', 'nggak', 'ngga', 'gak', 'ga', 'ndak', 'batal', 'batalkan', 'jangan', 'belum', 'nanti', 'no', 'engga']);
+  if (words.some((word) => negativeWords.has(word))) return 'no';
 
-  if (negativeLead.has(words[0]) && words.length <= 6 && words.slice(1).every((word) => negativeLead.has(word) || negativeTail.has(word))) return 'no';
-  if (positiveLead.has(words[0]) && words.length <= 6 && words.slice(1).every((word) => positiveTail.has(word) || positiveLead.has(word))) return 'yes';
+  // Terima frasa alami setelah persetujuan: "ya tambahkan", "iya boleh", "oke langsung catat".
+  const affirmativeLead = new Set([
+    'ya', 'yaa', 'iya', 'iyaa', 'iyah', 'yoi', 'oke', 'ok', 'setuju', 'boleh',
+    'siap', 'baik', 'tolong', 'lanjut', 'lanjutkan', 'silakan', 'benar', 'betul',
+    'tentu', 'gas', 'sip', 'yes', 'catat', 'simpan', 'tambahkan', 'tambah',
+    'tambahin', 'proses', 'jalankan', 'lakukan', 'langsung', 'jadi',
+  ]);
+  if (affirmativeLead.has(words[0]) && words.length <= 16) return 'yes';
   return 'unclear';
 }
 
@@ -217,7 +222,7 @@ function decodeBase64Audio(encoded: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord }: Props) {
+export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible = true, onManualRecord }: Props) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
   const [phase, setPhase] = useState<Phase>('idle');
@@ -246,6 +251,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const responseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const responseRef = useRef<ResponseCard | null>(null);
+  const stickyResponseRef = useRef(false);
+  const activeSpeechTextRef = useRef<string | null>(null);
   const startedAtRef = useRef(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -270,12 +278,32 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
     setPending(items);
   }, []);
 
+  const scheduleResponseDismiss = useCallback((card: ResponseCard, delay: number) => {
+    if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
+    responseTimerRef.current = setTimeout(() => {
+      if (responseRef.current?.id !== card.id) return;
+      if (activeSpeechTextRef.current === card.text || stickyResponseRef.current) return;
+      responseRef.current = null;
+      setResponse(null);
+    }, delay);
+  }, []);
+
+  const clearResponse = useCallback(() => {
+    if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
+    responseTimerRef.current = null;
+    responseRef.current = null;
+    stickyResponseRef.current = false;
+    setResponse(null);
+  }, []);
+
   const showResponse = useCallback((text: string, kind: ResponseKind, sticky = false) => {
     if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
-    const next = { id: crypto.randomUUID(), text, kind };
+    const next: ResponseCard = { id: crypto.randomUUID(), text, kind };
+    responseRef.current = next;
+    stickyResponseRef.current = sticky;
     setResponse(next);
-    if (!sticky) responseTimerRef.current = setTimeout(() => setResponse(null), 11_000);
-  }, []);
+    if (!sticky) scheduleResponseDismiss(next, 11_000);
+  }, [scheduleResponseDismiss]);
 
   const stopTracks = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -369,15 +397,22 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
     speechFrameRef.current = null;
     try { audioSourceRef.current?.stop(); } catch { /* audio mungkin sudah selesai */ }
     audioSourceRef.current = null;
+    const interruptedText = activeSpeechTextRef.current;
+    activeSpeechTextRef.current = null;
+    const currentCard = responseRef.current;
+    if (interruptedText && currentCard?.text === interruptedText && !stickyResponseRef.current) {
+      scheduleResponseDismiss(currentCard, 5_000);
+    }
     setSpeaking(false);
     setLoadingSpeech(false);
     setSpeechProgress(null);
-  }, []);
+  }, [scheduleResponseDismiss]);
 
   const speakText = useCallback(async (id: string, text: string) => {
     if (!text.trim() || !voiceEnabledRef.current) return;
     unlockAudio();
     stopCurrentSpeech();
+    activeSpeechTextRef.current = text;
     const requestId = speechRequestRef.current;
     setSpeechProgress({ text, visibleCount: 0, activeIndex: -1 });
     setLoadingSpeech(true);
@@ -400,6 +435,11 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
         speechFrameRef.current = null;
         setSpeaking(false);
         setSpeechProgress({ text, visibleCount: clip.cues.length, activeIndex: -1 });
+        if (activeSpeechTextRef.current === text) activeSpeechTextRef.current = null;
+        const finishedCard = responseRef.current;
+        if (finishedCard?.text === text && !stickyResponseRef.current) {
+          scheduleResponseDismiss(finishedCard, 5_000);
+        }
       };
 
       const updateProgress = () => {
@@ -466,10 +506,11 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
       setLoadingSpeech(false);
       setSpeaking(false);
       setSpeechProgress(null);
+      activeSpeechTextRef.current = null;
       const message = error instanceof Error ? error.message : 'Suara ElevenLabs belum tersedia.';
       showResponse(message, 'error', true);
     }
-  }, [getAccessToken, showResponse, stopCurrentSpeech, unlockAudio]);
+  }, [getAccessToken, scheduleResponseDismiss, showResponse, stopCurrentSpeech, unlockAudio]);
 
   const saveTransactions = useCallback(async () => {
     const items = pendingRef.current.filter((item): item is PendingTransaction => item.type === 'transaction');
@@ -634,8 +675,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
     busySendingRef.current = true;
     setBusySending(true);
     setPhase('thinking');
-    if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
-    setResponse(null);
+    clearResponse();
 
     const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content: message };
     const previous = historyRef.current.slice(-8).map(({ role, content }) => ({ role, content }));
@@ -652,7 +692,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
       const body = await result.json();
       if (!result.ok) throw new Error(body.error || 'CAVA belum dapat menjawab.');
 
-      const provider = body.provider === 'gemini' ? 'gemini' : 'groq';
+      const provider: Message['provider'] = body.provider === 'deepseek' ? 'deepseek' : body.provider === 'gemini' ? 'gemini' : 'groq';
       const rawActions = Array.isArray(body.actions) ? body.actions as Array<Record<string, unknown>> : [];
       const nonTransactionActions = rawActions.filter((item) => item?.type !== 'transaction');
       if (nonTransactionActions.length > 1 || (nonTransactionActions.length === 1 && rawActions.length > 1)) {
@@ -734,7 +774,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
       setBusySending(false);
       setPhase('idle');
     }
-  }, [downloadAccountingReport, getAccessToken, onManualRecord, router, setPendingItems, showResponse, speakText]);
+  }, [clearResponse, downloadAccountingReport, getAccessToken, onManualRecord, router, setPendingItems, showResponse, speakText]);
 
   const handleRecognizedText = useCallback(async (text: string) => {
     if (pendingRef.current.length) {
@@ -776,8 +816,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
     }
 
     stopCurrentSpeech();
-    if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
-    setResponse(null);
+    clearResponse();
     setSeconds(0);
     setPhase('requesting');
     pressedRef.current = true;
@@ -829,7 +868,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
       const message = shortError(err);
       showResponse(message, 'error');
     }
-  }, [busySaving, busySending, getAccessToken, phase, processAudio, showResponse, startMicVisualizer, stopCurrentSpeech, stopTimers, stopTracks, stopMicVisualizer]);
+  }, [busySaving, busySending, clearResponse, getAccessToken, phase, processAudio, showResponse, startMicVisualizer, stopCurrentSpeech, stopTimers, stopTracks, stopMicVisualizer]);
 
   const finishRecording = useCallback((cancel = false) => {
     pressedRef.current = false;
@@ -992,8 +1031,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
 
   return (
     <>
-      {variant === 'mobile' ? (
-        <div className="flex flex-col items-center">
+      {(variant === 'mobile' || variant === 'global') && controlsVisible && (
+        <div className={variant === 'global' ? 'fixed bottom-[calc(8px+env(safe-area-inset-bottom))] left-1/2 z-[55] flex -translate-x-1/2 flex-col items-center lg:hidden' : 'flex flex-col items-center'}>
           <button
             type="button"
             onPointerDown={handlePointerDown} onPointerUp={handlePointerUp}
@@ -1008,8 +1047,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', onManualRecord 
           </button>
           <span className="mt-0.5 py-1 text-[10px] font-extrabold text-[#103A57]">Catat</span>
         </div>
-      ) : (
-        <div className="w-full">
+      )}
+      {(variant === 'desktop' || variant === 'global') && controlsVisible && (
+        <div className={variant === 'global' ? 'fixed left-5 top-[88px] z-[55] hidden w-56 lg:block' : 'w-full'}>
           <button
             type="button"
             onPointerDown={handlePointerDown} onPointerUp={handlePointerUp}

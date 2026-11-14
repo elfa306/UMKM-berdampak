@@ -1,5 +1,6 @@
 import './globals.css';
 import BusinessProfileGate from '@/components/BusinessProfileGate';
+import GlobalCavaAssistant from '@/components/GlobalCavaAssistant';
 import CavaSplash from '@/components/CavaSplash';
 import FormA11y from '@/components/FormA11y';
 import type { ReactNode } from 'react';
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <FormA11y />
         <CavaSplash />
         <BusinessProfileGate />
+        <GlobalCavaAssistant />
         {children}
       </body>
     </html>

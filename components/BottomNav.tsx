@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
@@ -13,27 +13,11 @@ import {
   Sparkles, 
   Settings
 } from 'lucide-react';
-import QuickRecordModal from './QuickRecordModal';
-import { announceTransactionSaved, OPEN_CATAT_EVENT } from '@/lib/quickSession';
 import { CavaLogo } from './CavaLogo';
-import CavaVoiceAssistant from './CavaVoiceAssistant';
 import { supabase } from '@/lib/supabase';
 
 export default function BottomNav() {
   const p = usePathname();
-  const [showCatatModal, setShowCatatModal] = useState(false);
-  const [catatAwal, setCatatAwal] = useState<{ type: 'masuk' | 'keluar' | 'modal'; metode: 'tunai' | 'qris' }>({ type: 'masuk', metode: 'tunai' });
-
-  // Halaman lain (mis. Aksi Cepat di beranda) membuka modal ini lewat event, supaya hanya ada satu modal.
-  useEffect(() => {
-    const buka = (e: Event) => {
-      const d = (e as CustomEvent<{ type?: 'masuk' | 'keluar' | 'modal'; metode?: 'tunai' | 'qris' }>).detail ?? {};
-      setCatatAwal({ type: d.type ?? 'masuk', metode: d.metode ?? 'tunai' });
-      setShowCatatModal(true);
-    };
-    window.addEventListener(OPEN_CATAT_EVENT, buka);
-    return () => window.removeEventListener(OPEN_CATAT_EVENT, buka);
-  }, []);
   const [namaUsaha, setNamaUsaha] = useState('[Nama Usaha]');
 
   useEffect(() => {
@@ -103,10 +87,7 @@ export default function BottomNav() {
           </Link>
         ))}
 
-        <CavaVoiceAssistant
-          variant="mobile"
-          onManualRecord={(mode) => { setCatatAwal({ type: mode ?? 'masuk', metode: 'tunai' }); setShowCatatModal(true); }}
-        />
+        <div className="h-[48px]" aria-hidden="true" />
 
         {[
           { href: '/pembiayaan', label: 'Pembiayaan', Icon: Landmark, on: isPembiayaan },
@@ -136,11 +117,8 @@ export default function BottomNav() {
             </Link>
           </div>
 
-          {/* Voice assistant: tekan dan tahan untuk berbicara; pencatatan manual tetap tersedia dari panel AI. */}
-          <CavaVoiceAssistant
-            variant="desktop"
-            onManualRecord={(mode) => { setCatatAwal({ type: mode ?? 'masuk', metode: 'tunai' }); setShowCatatModal(true); }}
-          />
+          {/* Tombol Cashie dipasang pada root agar suara tetap berjalan saat berpindah halaman. */}
+          <div className="h-11" aria-hidden="true" />
 
           {/* Navigation Links */}
           <nav className="space-y-1.5">
@@ -182,14 +160,6 @@ export default function BottomNav() {
         </div>
       </aside>
 
-      {/* Global Quick Record Modal */}
-      <QuickRecordModal
-        isOpen={showCatatModal}
-        onClose={() => setShowCatatModal(false)}
-        initialType={catatAwal.type}
-        initialMetode={catatAwal.metode}
-        onSuccess={(detail) => announceTransactionSaved(detail)}
-      />
     </>
   );
 }
