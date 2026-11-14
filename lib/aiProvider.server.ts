@@ -1,4 +1,4 @@
-export type ProviderName = 'groq' | 'gemini';
+export type ProviderName = 'groq' | 'gemini' | 'deepseek';
 export type ChatRole = 'user' | 'assistant';
 export type ChatTurn = { role: ChatRole; content: string };
 
@@ -59,7 +59,7 @@ class ProviderError extends Error {
 }
 
 // Anggaran waktu per permintaan. Harus lebih kecil dari `maxDuration` route masing-masing
-// (chat = 30 dtk, transcribe = 60 dtk) supaya fallback ke Gemini sempat berjalan.
+// (chat = 30 dtk, transcribe = 60 dtk) supaya fallback ke Gemini/DeepSeek sempat berjalan.
 const CHAT_BUDGET_MS = 26_000;
 const TRANSCRIBE_BUDGET_MS = 50_000;
 // Groq biasanya menjawab dalam hitungan detik; bila diam lebih dari ini, langsung pindah ke Gemini.
@@ -193,6 +193,41 @@ async function geminiChat(system: string, history: ChatTurn[], message: string, 
   return content;
 }
 
+async function deepseekChat(system: string, history: ChatTurn[], message: string, timeoutMs: number): Promise<string> {
+  const key = process.env.DEEPSEEK_API_KEY;
+  if (!key) throw new ProviderError('DEEPSEEK_API_KEY belum diatur.');
+  const model = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: system },
+        ...history.map((turn) => ({ role: turn.role, content: turn.content })),
+        { role: 'user', content: message },
+      ],
+      max_tokens: 1800,
+      response_format: { type: 'json_object' },
+      // Cashie membutuhkan respons terstruktur yang cepat, bukan proses reasoning panjang.
+      thinking: { type: 'disabled' },
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    console.warn(`[CAVA AI] DeepSeek HTTP ${response.status}:`, detail.slice(0, 300));
+    throw new ProviderError(`DeepSeek mengembalikan HTTP ${response.status}.`, response.status);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) throw new Error('DeepSeek tidak memberikan jawaban.');
+  return content;
+}
+
 export async function generateAssistantReply(
   system: string,
   history: ChatTurn[],
@@ -200,31 +235,52 @@ export async function generateAssistantReply(
 ): Promise<{ result: AssistantResult; provider: ProviderName }> {
   let raw = '';
   let provider: ProviderName = 'groq';
-  let groqError: unknown;
+  let lastError: unknown;
   const deadline = Date.now() + CHAT_BUDGET_MS;
+  const hasGroq = Boolean(process.env.GROQ_API_KEY);
   const hasGemini = Boolean(process.env.GEMINI_API_KEY);
+  const hasDeepSeek = Boolean(process.env.DEEPSEEK_API_KEY);
 
-  if (process.env.GROQ_API_KEY) {
+  // Urutan provider chat: Groq utama, Gemini cadangan pertama, DeepSeek cadangan terakhir.
+  if (hasGroq) {
     try {
-      // Bila tidak ada cadangan, Groq boleh memakai seluruh anggaran waktu.
-      const groqMs = hasGemini ? GROQ_CHAT_MS : CHAT_BUDGET_MS;
+      const groqMs = hasGemini || hasDeepSeek ? GROQ_CHAT_MS : CHAT_BUDGET_MS;
       raw = await timed('chat groq', () => groqChat(system, history, message, groqMs));
+      provider = 'groq';
     } catch (error) {
-      groqError = error;
+      lastError = error;
       if (!canFallback(error)) throw error;
-      provider = 'gemini';
     }
-  } else {
-    provider = 'gemini';
+  }
+
+  if (!raw && hasGemini) {
+    const remaining = deadline - Date.now();
+    if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
+    // Bila DeepSeek juga aktif, sisakan hingga 8 detik untuk provider terakhir.
+    // Jika sisa waktu terlalu sempit, langsung gunakan DeepSeek daripada menghabiskan budget pada Gemini.
+    if (!hasDeepSeek || remaining >= MIN_FALLBACK_MS * 3) {
+      const geminiTimeout = hasDeepSeek ? remaining - 8_000 : remaining;
+      try {
+        raw = await timed('chat gemini', () => geminiChat(system, history, message, geminiTimeout));
+        provider = 'gemini';
+      } catch (error) {
+        lastError = error;
+        if (!canFallback(error)) throw error;
+      }
+    }
+  }
+
+  if (!raw && hasDeepSeek) {
+    const remaining = deadline - Date.now();
+    if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
+    raw = await timed('chat deepseek', () => deepseekChat(system, history, message, remaining));
+    provider = 'deepseek';
   }
 
   if (!raw) {
-    if (!process.env.GEMINI_API_KEY) {
-      throw groqError instanceof Error ? groqError : new Error('Atur GROQ_API_KEY atau GEMINI_API_KEY untuk mengaktifkan AI.');
-    }
-    const remaining = deadline - Date.now();
-    if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    raw = await timed('chat gemini', () => geminiChat(system, history, message, remaining));
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('Atur GROQ_API_KEY, GEMINI_API_KEY, atau DEEPSEEK_API_KEY untuk mengaktifkan AI.');
   }
 
   const parsed = parseJsonObject(raw);
