@@ -5,7 +5,7 @@ import { verifyAssistantActionToken } from '@/lib/aiActions.server';
 import type {
   ProductCreateAction, ProductDeleteAction, ProductUpdateAction,
   ProductionBatchCompleteAction, ProductionRecipeCreateAction, ProfileUpdateAction, AccountingEntryAction,
-  TransactionDeleteAction, OpeningBalanceSetupAction, StartDailySessionAction,
+  TransactionDeleteAction, OpeningBalanceSetupAction, StartDailySessionAction, DailyModalSetAction,
 } from '@/lib/aiProvider.server';
 
 export const runtime = 'nodejs';
@@ -81,6 +81,32 @@ export async function POST(request: Request) {
       });
       if (error) throw new Error(error.message.includes('opening_balance_already_set') ? 'Saldo awal sudah ditetapkan.' : 'Saldo awal gagal disimpan. Pastikan migration v17 sudah dijalankan.');
       return NextResponse.json({ ok: true, message: `Saldo awal usaha tersimpan: kas ${rupiahLabel(item.cash_amount)} dan bank/QRIS ${rupiahLabel(item.bank_amount)}.` }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+
+    if (action.type === 'daily_modal_set') {
+      const item = action as DailyModalSetAction;
+      const todayJakarta = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+      if (item.date !== todayJakarta) {
+        return NextResponse.json({ error: 'Tanggal modal harian sudah berubah. Ulangi perintah untuk tanggal hari ini.' }, { status: 409 });
+      }
+      if (!Number.isSafeInteger(item.amount) || item.amount < 0 || item.amount > 100_000_000_000) {
+        return NextResponse.json({ error: 'Nominal modal harian tidak valid.' }, { status: 400 });
+      }
+
+      const { data: opening, error: openingError } = await ctx.userClient.from('business_opening_balances')
+        .select('user_id').eq('user_id', ctx.user.id).maybeSingle();
+      if (openingError) throw new Error('Saldo awal usaha belum dapat diverifikasi.');
+      if (!opening) return NextResponse.json({ error: 'Saldo awal usaha belum ditetapkan. Lengkapi saldo awal dari Beranda terlebih dahulu.' }, { status: 409 });
+
+      const { data, error } = await ctx.userClient.from('daily_sessions')
+        .upsert({ user_id: ctx.user.id, tanggal: todayJakarta, modal_harian: item.amount }, { onConflict: 'user_id,tanggal' })
+        .select('id,modal_harian').single();
+      if (error || !data) throw new Error('Modal harian gagal disimpan. Periksa koneksi dan izin database CAVA.');
+
+      return NextResponse.json({
+        ok: true,
+        message: `Modal harian ${rupiahLabel(Number(data.modal_harian))} berhasil disimpan untuk ${todayJakarta}. Saldo kas dan bank tidak berubah.`,
+      }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
     if (action.type === 'start_daily_session') {

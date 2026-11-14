@@ -41,9 +41,10 @@ export type AccountingEntryAction = { type: 'accounting_entry'; kind: 'capital' 
 export type TransactionDeleteAction = { type: 'transaction_delete'; transaction_id: string; description: string; amount: number; date: string; jenis: 'penjualan' | 'biaya' };
 export type OpeningBalanceSetupAction = { type: 'opening_balance_setup'; cash_amount: number; bank_amount: number };
 export type StartDailySessionAction = { type: 'start_daily_session'; date: string };
+export type DailyModalSetAction = { type: 'daily_modal_set'; amount: number; date: string };
 export type AccountingReportExportAction = { type: 'accounting_report_export'; month: string };
 // Semua tindakan terkonfirmasi ditandatangani server dan hanya dapat dieksekusi satu kali.
-export type AssistantMutationAction = ProductCreateAction | ProductUpdateAction | ProductDeleteAction | ProductionRecipeCreateAction | ProductionBatchCompleteAction | ProfileUpdateAction | AccountingEntryAction | TransactionDeleteAction | OpeningBalanceSetupAction | StartDailySessionAction;
+export type AssistantMutationAction = ProductCreateAction | ProductUpdateAction | ProductDeleteAction | ProductionRecipeCreateAction | ProductionBatchCompleteAction | ProfileUpdateAction | AccountingEntryAction | TransactionDeleteAction | OpeningBalanceSetupAction | StartDailySessionAction | DailyModalSetAction;
 export type AssistantAction = ProposedTransaction | NavigateAction | OpenManualRecordAction | AccountingReportExportAction | AssistantMutationAction;
 
 export type AssistantResult = {
@@ -396,6 +397,14 @@ export async function generateAssistantReply(
       const bank = Number(action.bank_amount);
       if (!validPrice(cash, true) || !validPrice(bank, true)) return [];
       return [{ type: 'opening_balance_setup', cash_amount: cash, bank_amount: bank }];
+    }
+    if (action.type === 'daily_modal_set') {
+      const amount = Number(action.amount);
+      const date = action.date;
+      if (!validPrice(amount, true) || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+      const parsedDate = new Date(`${date}T00:00:00Z`);
+      if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) return [];
+      return [{ type: 'daily_modal_set', amount, date }];
     }
     if (action.type === 'start_daily_session') {
       const date = action.date;

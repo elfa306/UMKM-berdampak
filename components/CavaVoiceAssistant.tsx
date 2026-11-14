@@ -23,6 +23,7 @@ type PendingTransaction = {
 type PendingTransactionDelete = { type: 'transaction_delete'; transaction_id: string; description: string; amount: number; date: string; jenis: 'penjualan' | 'biaya' };
 type PendingOpeningBalanceSetup = { type: 'opening_balance_setup'; cash_amount: number; bank_amount: number };
 type PendingStartDailySession = { type: 'start_daily_session'; date: string };
+type PendingDailyModalSet = { type: 'daily_modal_set'; amount: number; date: string };
 type PendingProductCreate = { type: 'product_create'; nama: string; sku: string | null; kategori: string; jenis_item: 'merchandise' | 'raw_material' | 'work_in_progress' | 'finished_good' | 'service'; satuan: string; harga: number; harga_pokok: number };
 type PendingProductUpdate = { type: 'product_update'; product_id: string; product_name: string; changes: Partial<{ nama: string; sku: string | null; kategori: string; jenis_item: 'merchandise' | 'finished_good' | 'service'; satuan: string; harga: number; harga_pokok: number }> };
 type PendingProductDelete = { type: 'product_delete'; product_id: string; product_name: string };
@@ -30,7 +31,7 @@ type PendingProductionRecipeCreate = { type: 'production_recipe_create'; name: s
 type PendingProductionBatchComplete = { type: 'production_batch_complete'; recipe_id: string; recipe_name: string; batch_count: number; labor_cost: number; overhead_cost: number; note: string | null };
 type PendingProfileUpdate = { type: 'profile_update'; changes: Partial<{ nama_usaha: string; tanggal_mulai_usaha: string; hari_buka_per_bulan: number; kebutuhan_modal: number; jenis_usaha: 'retail' | 'manufaktur' | 'jasa' | 'campuran'; bentuk_usaha: 'perorangan' | 'pt_perorangan' | 'cv' | 'pt' | 'koperasi' | 'lainnya'; bidang_usaha: string; memiliki_persediaan: boolean; metode_pembayaran: 'gopay_macrodroid' | 'manual' }> };
 type PendingAccountingEntry = { type: 'accounting_entry'; kind: 'capital' | 'draw' | 'supplier_payment' | 'labor_payment' | 'overhead_payment'; amount: number; description: string; payment_account: '1000' | '1010' };
-type PendingAction = PendingTransaction | PendingTransactionDelete | PendingOpeningBalanceSetup | PendingStartDailySession | PendingProductCreate | PendingProductUpdate | PendingProductDelete | PendingProductionRecipeCreate | PendingProductionBatchComplete | PendingProfileUpdate | PendingAccountingEntry;
+type PendingAction = PendingTransaction | PendingTransactionDelete | PendingOpeningBalanceSetup | PendingStartDailySession | PendingDailyModalSet | PendingProductCreate | PendingProductUpdate | PendingProductDelete | PendingProductionRecipeCreate | PendingProductionBatchComplete | PendingProfileUpdate | PendingAccountingEntry;
 type ResponseKind = 'answer' | 'confirm' | 'success' | 'error';
 type ResponseCard = { id: string; text: string; kind: ResponseKind };
 type SpeechAlignment = {
@@ -107,6 +108,7 @@ function actionConfirmation(actions: PendingAction[]): string {
   if (action.type === 'transaction') return transactionConfirmation([action]);
   if (action.type === 'transaction_delete') return `Saya akan membatalkan transaksi ${action.jenis === 'biaya' ? 'pengeluaran' : 'penjualan'} ${action.description} sebesar ${rupiah(action.amount)} tanggal ${action.date}. Jika transaksi berasal dari kasir, pembatalan juga menyesuaikan stok atau pembayaran terkait. Apakah saya lanjutkan?`;
   if (action.type === 'opening_balance_setup') return `Saya akan menetapkan saldo awal satu kali: kas ${rupiah(action.cash_amount)} dan bank/QRIS ${rupiah(action.bank_amount)}. Setelah disimpan, saldo awal tidak dapat diatur ulang melalui Cashie. Boleh saya simpan?`;
+  if (action.type === 'daily_modal_set') return `Saya akan menyimpan modal harian ${rupiah(action.amount)} untuk ${action.date}. Ini hanya alokasi harian dan tidak menambah saldo kas atau bank. Boleh saya simpan?`;
   if (action.type === 'start_daily_session') return `Saya akan membuka aktivitas harian tanggal ${action.date} menggunakan saldo awal usaha yang tersimpan. Boleh saya buka?`;
   if (action.type === 'product_create') {
     const kind = action.jenis_item === 'raw_material' ? 'bahan baku' : action.jenis_item === 'work_in_progress' ? 'barang dalam proses' : action.jenis_item === 'service' ? 'jasa' : action.jenis_item === 'finished_good' ? 'produk sendiri' : 'barang dagangan';
@@ -560,7 +562,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     if (savingRef.current) return;
     const actions = pendingRef.current;
     const actionToken = pendingTokenRef.current;
-    const hasSupportedAction = actions.length === 1 && ['product_create', 'product_update', 'product_delete', 'production_recipe_create', 'production_batch_complete', 'profile_update', 'accounting_entry', 'transaction_delete', 'opening_balance_setup', 'start_daily_session'].includes(actions[0]?.type);
+    const hasSupportedAction = actions.length === 1 && ['product_create', 'product_update', 'product_delete', 'production_recipe_create', 'production_batch_complete', 'profile_update', 'accounting_entry', 'transaction_delete', 'opening_balance_setup', 'start_daily_session', 'daily_modal_set'].includes(actions[0]?.type);
     if (!hasSupportedAction || !actionToken) throw new Error('Izin tindakan tidak tersedia atau sudah kedaluwarsa. Ulangi perintahnya.');
 
     savingRef.current = true;
@@ -732,7 +734,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         return;
       }
 
-      const actions = rawActions.filter((item) => item?.type === 'transaction' || item?.type === 'transaction_delete' || item?.type === 'opening_balance_setup' || item?.type === 'start_daily_session' || item?.type === 'product_create' || item?.type === 'product_update' || item?.type === 'product_delete' || item?.type === 'production_recipe_create' || item?.type === 'production_batch_complete' || item?.type === 'profile_update' || item?.type === 'accounting_entry') as PendingAction[];
+      const actions = rawActions.filter((item) => item?.type === 'transaction' || item?.type === 'transaction_delete' || item?.type === 'opening_balance_setup' || item?.type === 'start_daily_session' || item?.type === 'daily_modal_set' || item?.type === 'product_create' || item?.type === 'product_update' || item?.type === 'product_delete' || item?.type === 'production_recipe_create' || item?.type === 'production_batch_complete' || item?.type === 'profile_update' || item?.type === 'accounting_entry') as PendingAction[];
       const transactionActions = actions.filter((item): item is PendingTransaction => item.type === 'transaction');
       const appActions = actions.filter((item) => item.type !== 'transaction');
       const validTransactions = transactionActions.filter((item) =>
@@ -1116,7 +1118,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
                 )}
                 {pending.length > 0 && (
                   <div className="mt-2.5 flex gap-2">
-                    <button type="button" onClick={confirmPending} disabled={busySaving || !pending.length || (pending.some((item) => ['product_create','product_update','product_delete','production_recipe_create','production_batch_complete','profile_update','accounting_entry','transaction_delete','opening_balance_setup','start_daily_session'].includes(item.type)) && !pendingTokenRef.current)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#103A57] px-3 py-2 text-[10px] font-extrabold text-white disabled:opacity-50">
+                    <button type="button" onClick={confirmPending} disabled={busySaving || !pending.length || (pending.some((item) => ['product_create','product_update','product_delete','production_recipe_create','production_batch_complete','profile_update','accounting_entry','transaction_delete','opening_balance_setup','start_daily_session','daily_modal_set'].includes(item.type)) && !pendingTokenRef.current)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#103A57] px-3 py-2 text-[10px] font-extrabold text-white disabled:opacity-50">
                       {busySaving ? <LoaderCircle size={12} className="animate-spin"/> : <Check size={12}/>} {pending.every((item) => item.type === 'transaction') ? 'Ya, catat' : 'Ya, lanjutkan'}
                     </button>
                     <button type="button" onClick={cancelPending} disabled={busySaving} className="rounded-lg border border-[#D6E3DC] px-3 py-2 text-[10px] font-bold text-[#456273] disabled:opacity-50">Tidak, batalkan</button>

@@ -164,6 +164,10 @@ export default function Kasir() {
     setProducts((p.data ?? []).map((x) => ({ ...x, harga: Number(x.harga) })));
     if (s.data) {
       const sesiHariIni = { id: s.data.id, modal_harian: Number(s.data.modal_harian) };
+      const sesiSebelumnya = sesiRef.current;
+      if (!sesiSebelumnya || sesiSebelumnya.id !== sesiHariIni.id || sesiSebelumnya.modal_harian !== sesiHariIni.modal_harian) {
+        setModalHarianInput(String(sesiHariIni.modal_harian));
+      }
       setSesi(sesiHariIni);
 
       // Modal_harian dipertahankan hanya untuk kompatibilitas catatan lama.
@@ -192,6 +196,7 @@ export default function Kasir() {
       publishActiveInvoice(pending.data ? { invoice_no: pending.data.invoice_no as string, total: Number(pending.data.total) } : null);
     } else {
       setSesi(null);
+      setModalHarianInput('0');
       setTxs([]);
       publishActiveInvoice(null);
     }
@@ -237,7 +242,7 @@ export default function Kasir() {
     const akhir = new Date(tanggal + 'T12:00:00'); akhir.setDate(akhir.getDate() - 1);
     const awal = new Date(akhir); awal.setDate(awal.getDate() - 6);
     fetchHari(awal.toLocaleDateString('en-CA'), akhir.toLocaleDateString('en-CA')).then((h) =>
-      setTren([...h].reverse().map((x) => { const sum = summarize(x.modal, x.txs); return { tanggal: x.tanggal, uangMasuk: sum.pendapatan, untung: sum.labaBersih }; }))
+      setTren([...h].reverse().map((x) => { const sum = summarize(0, x.txs); return { tanggal: x.tanggal, uangMasuk: sum.pendapatan, untung: sum.labaBersih }; }))
     ).catch(() => undefined);
   }, [ready, tanggal]);
 
@@ -353,9 +358,46 @@ export default function Kasir() {
 
       if (!sesiBaru) throw new Error('Sesi harian gagal dibuka.');
       setSesi({ id: sesiBaru.id, modal_harian: Number(sesiBaru.modal_harian) });
+      setModalHarianInput(String(Number(sesiBaru.modal_harian)));
       await load();
     } catch (error) {
       setErr(error instanceof Error ? error.message : 'Gagal membuka aktivitas harian. Coba lagi.');
+    } finally {
+      setMenyimpanModal(false);
+    }
+  }
+
+  async function simpanModalHarian(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (menyimpanModal) return;
+    if (!sesi || !userId || userId === 'guest') {
+      setErr('Sesi harian belum tersedia. Muat ulang Beranda dan coba kembali.');
+      return;
+    }
+
+    const form = new FormData(e.currentTarget);
+    const amountText = String(form.get('modalHarianAktif') ?? '').trim();
+    const amount = amountText === '' ? NaN : Number(amountText);
+    if (!Number.isSafeInteger(amount) || amount < 0 || amount > 100_000_000_000) {
+      setErr('Masukkan nominal modal harian berupa bilangan bulat yang tidak negatif.');
+      return;
+    }
+
+    setMenyimpanModal(true);
+    setErr('');
+    try {
+      const { data, error } = await supabase.from('daily_sessions')
+        .update({ modal_harian: amount })
+        .eq('id', sesi.id).eq('user_id', userId).eq('tanggal', tanggal)
+        .select('id,modal_harian').single();
+      if (error || !data) throw new Error('Modal harian gagal disimpan. Periksa koneksi, lalu coba lagi.');
+
+      const savedAmount = Number(data.modal_harian);
+      setSesi({ id: data.id, modal_harian: savedAmount });
+      setModalHarianInput(String(savedAmount));
+      info(`Modal harian ${rupiah(savedAmount)} berhasil disimpan.`);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : 'Modal harian gagal disimpan.');
     } finally {
       setMenyimpanModal(false);
     }
@@ -457,7 +499,7 @@ export default function Kasir() {
   // Laba harian dihitung dari jurnal: pendapatan dikurangi HPP dan beban aktual.
   // modal_harian hanya dipertahankan untuk kompatibilitas laporan historis.
   const liveSummary = summarize(0, txs);
-  const hppHarian = ringkasanHarian.hpp > 0 ? ringkasanHarian.hpp : (sesi?.modal_harian ?? 0);
+  const hppHarian = ringkasanHarian.hpp;
   const untungBersih = ringkasanHarian.pendapatan - hppHarian - ringkasanHarian.beban;
   const totalMasuk = liveSummary.pendapatan;
   const totalKeluar = liveSummary.beban;
@@ -586,7 +628,7 @@ export default function Kasir() {
                 : perluSaldoAwal ? 'Simpan saldo awal & mulai' : 'Mulai aktivitas hari ini'}
             </button>
             <p className="mt-4 text-center text-[11px] leading-5 text-slate-400">
-              Setelah sesi hari ini dibuka, CAVA akan langsung membawa kamu ke dashboard tanpa meminta modal lagi.
+              Setelah sesi dibuka, modal harian tetap bisa diubah melalui Beranda atau perintah Cashie.
             </p>
           </form>
         </div>
@@ -683,6 +725,43 @@ export default function Kasir() {
           </div>
         </section>
       </Rise>
+
+      {sesi && userId && userId !== 'guest' && (
+        <Rise delay={0.035}>
+          <form onSubmit={simpanModalHarian} className="card space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="card-title">Modal harian</h2>
+                <p className="m-0 mt-1 text-[11px] leading-5 text-[#4F6B7C]">Alokasi dana untuk kegiatan usaha hari ini. Dicatat terpisah dan tidak otomatis mengubah saldo kas atau bank.</p>
+              </div>
+              <span className="shrink-0 rounded-full bg-[#E3F0EA] px-3 py-1 text-[10px] font-extrabold text-[#103A57]">
+                {rupiah(sesi.modal_harian)}
+              </span>
+            </div>
+            <label className="block">
+              <span className="block text-xs font-bold text-[#103A57]">Nominal modal hari ini</span>
+              <input
+                name="modalHarianAktif"
+                type="number"
+                min="0"
+                step="1"
+                required
+                inputMode="numeric"
+                value={modalHarianInput}
+                onChange={(event) => setModalHarianInput(event.target.value)}
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-extrabold tabular-nums text-[#103A57] outline-none focus:border-[#307B8E] focus:bg-white"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={menyimpanModal}
+              className="flex min-h-11 w-full items-center justify-center rounded-xl bg-[#103A57] px-4 py-2.5 text-xs font-extrabold text-white transition hover:bg-[#205874] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {menyimpanModal ? 'Menyimpan…' : 'Simpan modal harian'}
+            </button>
+          </form>
+        </Rise>
+      )}
 
       {err && (
         <div className="rounded-2xl bg-red-50 p-3 text-xs font-bold text-[#991B1B]">

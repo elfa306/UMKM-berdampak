@@ -15,7 +15,7 @@ export function signAssistantActions(userId: string, actions: AssistantAction[])
     action.type === 'product_create' || action.type === 'product_update' || action.type === 'product_delete' ||
     action.type === 'production_recipe_create' || action.type === 'production_batch_complete' ||
     action.type === 'profile_update' || action.type === 'accounting_entry' || action.type === 'transaction_delete' ||
-    action.type === 'opening_balance_setup' || action.type === 'start_daily_session',
+    action.type === 'opening_balance_setup' || action.type === 'start_daily_session' || action.type === 'daily_modal_set',
   );
   if (!mutations.length) return null;
   if (mutations.length > 1) throw new Error('Satu perintah hanya boleh memuat satu perubahan data terstruktur.');
@@ -48,6 +48,6 @@ export function verifyAssistantActionToken(token: unknown, userId: string): Sign
   if (proposal.uid !== userId || !Number.isFinite(proposal.exp) || Number(proposal.exp) < Date.now() || typeof proposal.nonce !== 'string' || !/^[0-9a-f-]{36}$/i.test(proposal.nonce)) return null;
   if (!Array.isArray(proposal.actions) || proposal.actions.length !== 1) return null;
   const action = proposal.actions[0] as Record<string, unknown>;
-  if (!['product_create', 'product_update', 'product_delete', 'production_recipe_create', 'production_batch_complete', 'profile_update', 'accounting_entry', 'transaction_delete', 'opening_balance_setup', 'start_daily_session'].includes(String(action?.type))) return null;
+  if (!['product_create', 'product_update', 'product_delete', 'production_recipe_create', 'production_batch_complete', 'profile_update', 'accounting_entry', 'transaction_delete', 'opening_balance_setup', 'start_daily_session', 'daily_modal_set'].includes(String(action?.type))) return null;
   return proposal as SignedProposal;
 }
