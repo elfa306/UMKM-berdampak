@@ -1,4 +1,4 @@
-export type ProviderName = 'groq' | 'gemini' | 'deepseek';
+export type ProviderName = 'groq' | 'gemini' | 'openrouter';
 export type ChatRole = 'user' | 'assistant';
 export type ChatTurn = { role: ChatRole; content: string };
 
@@ -193,14 +193,14 @@ async function geminiChat(system: string, history: ChatTurn[], message: string, 
   return content;
 }
 
-async function deepseekChat(system: string, history: ChatTurn[], message: string, timeoutMs: number): Promise<string> {
-  const key = process.env.DEEPSEEK_API_KEY;
-  if (!key) throw new ProviderError('DEEPSEEK_API_KEY belum diatur.');
-  const model = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
+async function openRouterChat(system: string, history: ChatTurn[], message: string, timeoutMs: number): Promise<string> {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) throw new ProviderError('OPENROUTER_API_KEY belum diatur.');
+  const model = process.env.OPENROUTER_MODEL || 'openrouter/free';
 
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'X-Title': 'CAVA - Cash Value' },
     body: JSON.stringify({
       model,
       messages: [
@@ -208,29 +208,36 @@ async function deepseekChat(system: string, history: ChatTurn[], message: string
         ...history.map((turn) => ({ role: turn.role, content: turn.content })),
         { role: 'user', content: message },
       ],
+      temperature: 0.2,
       max_tokens: 1800,
+      // Cashie memakai JSON untuk membedakan jawaban biasa dan tindakan aplikasi.
+      // Free Router memilih model gratis yang mendukung structured output bila tersedia.
       response_format: { type: 'json_object' },
-      // Cashie membutuhkan respons terstruktur yang cepat, bukan proses reasoning panjang.
-      thinking: { type: 'disabled' },
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
-    console.warn(`[CAVA AI] DeepSeek HTTP ${response.status}:`, detail.slice(0, 500));
-    if (response.status === 402) {
-      throw new ProviderError('Saldo API DeepSeek tidak mencukupi. Periksa saldo akun DeepSeek Platform; angka Usage 0 tidak menunjukkan bahwa saldo masih tersedia.', 402);
-    }
+    console.warn(`[CAVA AI] OpenRouter HTTP ${response.status}:`, detail.slice(0, 500));
     if (response.status === 401) {
-      throw new ProviderError('API key DeepSeek tidak valid atau sudah dinonaktifkan. Periksa DEEPSEEK_API_KEY di Vercel.', 401);
+      throw new ProviderError('API key OpenRouter tidak valid. Periksa OPENROUTER_API_KEY di Vercel.', 401);
     }
-    throw new ProviderError(`DeepSeek mengembalikan HTTP ${response.status}.`, response.status);
+    if (response.status === 402) {
+      throw new ProviderError('OpenRouter menolak permintaan karena saldo atau konfigurasi akun. Pastikan model menggunakan openrouter/free.', 402);
+    }
+    if (response.status === 429) {
+      throw new ProviderError('Batas permintaan OpenRouter Free tercapai atau model sedang sibuk. Coba lagi nanti.', 429);
+    }
+    throw new ProviderError(`OpenRouter mengembalikan HTTP ${response.status}.`, response.status);
   }
 
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) throw new Error('DeepSeek tidak memberikan jawaban.');
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('OpenRouter tidak memberikan jawaban teks yang valid.');
+  }
+  console.info(`[CAVA AI] OpenRouter model=${data?.model ?? model}`);
   return content;
 }
 
@@ -245,12 +252,12 @@ export async function generateAssistantReply(
   const deadline = Date.now() + CHAT_BUDGET_MS;
   const hasGroq = Boolean(process.env.GROQ_API_KEY);
   const hasGemini = Boolean(process.env.GEMINI_API_KEY);
-  const hasDeepSeek = Boolean(process.env.DEEPSEEK_API_KEY);
+  const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
 
-  // Urutan provider chat: Groq utama, Gemini cadangan pertama, DeepSeek cadangan terakhir.
+  // Urutan provider chat: Groq utama, Gemini cadangan pertama, OpenRouter Free cadangan terakhir.
   if (hasGroq) {
     try {
-      const groqMs = hasGemini || hasDeepSeek ? GROQ_CHAT_MS : CHAT_BUDGET_MS;
+      const groqMs = hasGemini || hasOpenRouter ? GROQ_CHAT_MS : CHAT_BUDGET_MS;
       raw = await timed('chat groq', () => groqChat(system, history, message, groqMs));
       provider = 'groq';
     } catch (error) {
@@ -262,10 +269,10 @@ export async function generateAssistantReply(
   if (!raw && hasGemini) {
     const remaining = deadline - Date.now();
     if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    // Bila DeepSeek juga aktif, sisakan hingga 8 detik untuk provider terakhir.
-    // Jika sisa waktu terlalu sempit, langsung gunakan DeepSeek daripada menghabiskan budget pada Gemini.
-    if (!hasDeepSeek || remaining >= MIN_FALLBACK_MS * 3) {
-      const geminiTimeout = hasDeepSeek ? remaining - 8_000 : remaining;
+    // Bila OpenRouter juga aktif, sisakan hingga 8 detik untuk provider terakhir.
+    // Jika sisa waktu terlalu sempit, langsung gunakan OpenRouter daripada menghabiskan budget pada Gemini.
+    if (!hasOpenRouter || remaining >= MIN_FALLBACK_MS * 3) {
+      const geminiTimeout = hasOpenRouter ? remaining - 8_000 : remaining;
       try {
         raw = await timed('chat gemini', () => geminiChat(system, history, message, geminiTimeout));
         provider = 'gemini';
@@ -276,17 +283,17 @@ export async function generateAssistantReply(
     }
   }
 
-  if (!raw && hasDeepSeek) {
+  if (!raw && hasOpenRouter) {
     const remaining = deadline - Date.now();
     if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    raw = await timed('chat deepseek', () => deepseekChat(system, history, message, remaining));
-    provider = 'deepseek';
+    raw = await timed('chat openrouter', () => openRouterChat(system, history, message, remaining));
+    provider = 'openrouter';
   }
 
   if (!raw) {
     throw lastError instanceof Error
       ? lastError
-      : new Error('Atur GROQ_API_KEY, GEMINI_API_KEY, atau DEEPSEEK_API_KEY untuk mengaktifkan AI.');
+      : new Error('Atur GROQ_API_KEY, GEMINI_API_KEY, atau OPENROUTER_API_KEY untuk mengaktifkan AI.');
   }
 
   const parsed = parseJsonObject(raw);

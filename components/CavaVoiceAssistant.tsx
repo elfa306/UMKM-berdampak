@@ -11,7 +11,7 @@ import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from
 import { todayISO, rupiah } from '@/lib/accounting';
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'thinking';
-type Message = { id: string; role: 'user' | 'assistant'; content: string; provider?: 'groq' | 'gemini' | 'deepseek' };
+type Message = { id: string; role: 'user' | 'assistant'; content: string; provider?: 'groq' | 'gemini' | 'openrouter' };
 type PendingTransaction = {
   type: 'transaction';
   jenis: 'penjualan' | 'biaya';
@@ -692,7 +692,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       const body = await result.json();
       if (!result.ok) throw new Error(body.error || 'CAVA belum dapat menjawab.');
 
-      const provider: Message['provider'] = body.provider === 'deepseek' ? 'deepseek' : body.provider === 'gemini' ? 'gemini' : 'groq';
+      const provider: Message['provider'] = body.provider === 'openrouter' ? 'openrouter' : body.provider === 'gemini' ? 'gemini' : 'groq';
       const rawActions = Array.isArray(body.actions) ? body.actions as Array<Record<string, unknown>> : [];
       const nonTransactionActions = rawActions.filter((item) => item?.type !== 'transaction');
       if (nonTransactionActions.length > 1 || (nonTransactionActions.length === 1 && rawActions.length > 1)) {
