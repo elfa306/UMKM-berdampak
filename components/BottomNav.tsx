@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { motion } from 'framer-motion';
 import { 
   Home, 
   History, 
@@ -12,13 +11,12 @@ import {
   Package, 
   TrendingUp, 
   Sparkles, 
-  PlusCircle, 
-  Settings,
-  LogOut
+  Settings
 } from 'lucide-react';
 import QuickRecordModal from './QuickRecordModal';
 import { announceTransactionSaved, OPEN_CATAT_EVENT } from '@/lib/quickSession';
-import { CavaLogo, CavaVMark } from './CavaLogo';
+import { CavaLogo } from './CavaLogo';
+import CavaVoiceAssistant from './CavaVoiceAssistant';
 import { supabase } from '@/lib/supabase';
 
 export default function BottomNav() {
@@ -105,17 +103,10 @@ export default function BottomNav() {
           </Link>
         ))}
 
-        <div className="flex flex-col items-center">
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            onClick={() => { setCatatAwal({ type: 'masuk', metode: 'tunai' }); setShowCatatModal(true); }}
-            aria-label="Catat transaksi"
-            className="-mt-7 flex h-14 w-14 items-center justify-center rounded-full bg-[#103A57] text-white shadow-[0_8px_18px_rgba(16,58,87,0.35)] ring-4 ring-white"
-          >
-            <CavaVMark size={28} />
-          </motion.button>
-          <span className="mt-0.5 py-1 text-[10.5px] font-extrabold text-[#103A57]">Catat</span>
-        </div>
+        <CavaVoiceAssistant
+          variant="mobile"
+          onManualRecord={(mode) => { setCatatAwal({ type: mode ?? 'masuk', metode: 'tunai' }); setShowCatatModal(true); }}
+        />
 
         {[
           { href: '/pembiayaan', label: 'Pembiayaan', Icon: Landmark, on: isPembiayaan },
@@ -145,16 +136,11 @@ export default function BottomNav() {
             </Link>
           </div>
 
-          {/* Quick Catat CTA Button */}
-          <motion.button
-            whileTap={{ scale: 0.95 }}
-            whileHover={{ scale: 1.02 }}
-            onClick={() => { setCatatAwal({ type: 'masuk', metode: 'tunai' }); setShowCatatModal(true); }}
-            className="w-full py-3 px-4 rounded-xl bg-[#CEE5D6] hover:bg-white text-[#103A57] font-extrabold text-xs flex items-center justify-center gap-2.5 transition-all"
-          >
-            <CavaVMark size={18} />
-            <span>Catat transaksi</span>
-          </motion.button>
+          {/* Voice assistant: tekan dan tahan untuk berbicara; pencatatan manual tetap tersedia dari panel AI. */}
+          <CavaVoiceAssistant
+            variant="desktop"
+            onManualRecord={(mode) => { setCatatAwal({ type: mode ?? 'masuk', metode: 'tunai' }); setShowCatatModal(true); }}
+          />
 
           {/* Navigation Links */}
           <nav className="space-y-1.5">

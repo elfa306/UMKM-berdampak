@@ -1027,3 +1027,19 @@ input.loan-range::-moz-range-thumb {
   border: 0 !important;
   white-space: nowrap !important;
 }
+
+@keyframes cava-wave {
+  0%, 100% { transform: scaleY(.45); opacity: .65; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+
+/* Cashie microphone waveform: each bar follows live microphone amplitude. */
+.cashie-wave-bar {
+  transition: height 48ms linear, opacity 48ms linear;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cashie-wave-bar { transition: none; }
+}

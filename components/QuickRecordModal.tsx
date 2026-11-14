@@ -107,7 +107,7 @@ export default function QuickRecordModal({
       const sessionId = await ensureTodaySession(todayISO());
       if (!sessionId) {
         setLoading(false);
-        setErrMsg('Modal harian belum diisi. Buka Beranda CAVA, masukkan modal untuk hari ini, lalu mulai aktivitas. Transaksi belum disimpan.');
+        setErrMsg('Sesi hari ini belum dibuka. Buka Beranda CAVA, konfirmasi saldo awal usaha, lalu mulai aktivitas harian. Transaksi belum disimpan.');
         return;
       }
 
