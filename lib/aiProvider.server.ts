@@ -59,7 +59,7 @@ class ProviderError extends Error {
 }
 
 // Anggaran waktu per permintaan. Harus lebih kecil dari `maxDuration` route masing-masing
-// (chat = 30 dtk, transcribe = 60 dtk) supaya fallback ke Gemini/DeepSeek sempat berjalan.
+// (chat = 30 dtk, transcribe = 60 dtk) supaya fallback ke Gemini/OpenRouter sempat berjalan.
 const CHAT_BUDGET_MS = 26_000;
 const TRANSCRIBE_BUDGET_MS = 50_000;
 // Groq biasanya menjawab dalam hitungan detik; bila diam lebih dari ini, langsung pindah ke Gemini.
