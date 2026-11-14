@@ -19,7 +19,7 @@ API key hanya digunakan di server. Jangan menambahkan prefix `NEXT_PUBLIC_`, jan
 
 - OpenRouter Free menjadi fallback chat terakhir setelah Groq dan Gemini.
 - Request menggunakan endpoint Chat Completions yang kompatibel dengan format OpenAI.
-- Cashie meminta respons JSON (`response_format: { type: 'json_object' }`) agar alur validasi tindakan yang sudah ada tetap digunakan.
+- Cashie meminta respons JSON (`response_format: { type: 'json_object' }`) dan mengaktifkan `provider.require_parameters: true` agar hanya endpoint yang mendukung parameter tersebut yang dipilih. Parser juga menangani teks yang dikirim sebagai string maupun array bagian teks; diagnostik hanya mencatat metadata respons, bukan isi percakapan.
 - Transkripsi suara tetap memakai Groq Whisper lalu Gemini.
 - Suara balasan tetap memakai ElevenLabs.
 - Tidak ada perubahan UI utama, daftar tindakan Cashie, autentikasi, database, atau migration.
