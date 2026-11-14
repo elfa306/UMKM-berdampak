@@ -208,10 +208,9 @@ async function openRouterChat(system: string, history: ChatTurn[], message: stri
         ...history.map((turn) => ({ role: turn.role, content: turn.content })),
         { role: 'user', content: message },
       ],
-      temperature: 0.2,
       max_tokens: 1800,
-      // Cashie memakai JSON untuk membedakan jawaban biasa dan tindakan aplikasi.
-      // Free Router memilih model gratis yang mendukung structured output bila tersedia.
+      // Hanya rute ke endpoint yang mendukung JSON mode dan parameter yang diminta.
+      provider: { require_parameters: true },
       response_format: { type: 'json_object' },
     }),
     signal: AbortSignal.timeout(timeoutMs),
@@ -233,11 +232,54 @@ async function openRouterChat(system: string, history: ChatTurn[], message: stri
   }
 
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) {
-    throw new Error('OpenRouter tidak memberikan jawaban teks yang valid.');
+  if (data?.error) {
+    const apiMessage = typeof data.error.message === 'string' ? data.error.message.slice(0, 240) : 'respons memuat objek error';
+    console.warn('[CAVA AI] OpenRouter response error:', { code: data.error.code ?? null, message: apiMessage });
+    throw new ProviderError(`OpenRouter mengembalikan error: ${apiMessage}`, Number(data.error.code) || 502);
   }
-  console.info(`[CAVA AI] OpenRouter model=${data?.model ?? model}`);
+
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+  const assistantMessage = choice?.message;
+  const rawContent = assistantMessage?.content;
+  const content = typeof rawContent === 'string'
+    ? rawContent.trim()
+    : Array.isArray(rawContent)
+      ? rawContent.map((part: unknown) => {
+          if (typeof part === 'string') return part;
+          if (!part || typeof part !== 'object') return '';
+          const item = part as { type?: string; text?: string };
+          // Jangan mengubah blok reasoning menjadi jawaban yang ditampilkan kepada pengguna.
+          return (!item.type || item.type === 'text' || item.type === 'output_text') && typeof item.text === 'string'
+            ? item.text
+            : '';
+        }).join('').trim()
+      : '';
+
+  if (!content) {
+    const finishReason = typeof choice?.finish_reason === 'string' ? choice.finish_reason : 'tidak tersedia';
+    const messageKeys = assistantMessage && typeof assistantMessage === 'object' ? Object.keys(assistantMessage) : [];
+    const hasReasoning = Boolean(assistantMessage?.reasoning || assistantMessage?.reasoning_content || assistantMessage?.reasoning_details);
+    const hasRefusal = typeof assistantMessage?.refusal === 'string' && assistantMessage.refusal.length > 0;
+
+    // Log hanya metadata respons, bukan prompt atau isi percakapan yang bisa berisi data keuangan UMKM.
+    console.warn('[CAVA AI] OpenRouter tidak mengirim teks jawaban:', {
+      model: data?.model ?? model,
+      finishReason,
+      nativeFinishReason: choice?.native_finish_reason ?? null,
+      messageKeys,
+      contentType: Array.isArray(rawContent) ? 'array' : typeof rawContent,
+      hasReasoning,
+      hasRefusal,
+      completionTokens: data?.usage?.completion_tokens ?? null,
+    });
+
+    if (hasRefusal) throw new ProviderError('Model OpenRouter menolak permintaan ini. Coba sampaikan perintah dengan cara berbeda.', 502);
+    if (finishReason === 'length') throw new ProviderError('Jawaban OpenRouter terpotong sebelum teks selesai. Coba perintah yang lebih singkat.', 502);
+    if (hasReasoning) throw new ProviderError('Model OpenRouter hanya mengirim proses internal tanpa jawaban akhir. Coba ulangi perintah.', 502);
+    throw new ProviderError(`OpenRouter tidak mengirim teks jawaban (finish_reason: ${finishReason}). Coba lagi atau periksa Runtime Logs Vercel.`, 502);
+  }
+
+  console.info(`[CAVA AI] OpenRouter model=${data?.model ?? model} finish_reason=${choice?.finish_reason ?? '-'}`);
   return content;
 }
 
