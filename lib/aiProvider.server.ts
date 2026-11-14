@@ -94,7 +94,8 @@ async function timed<T>(label: string, task: () => Promise<T>): Promise<T> {
 
 function canFallback(error: unknown): boolean {
   if (!(error instanceof ProviderError)) return true;
-  return error.status === 408 || error.status === 429 || (error.status !== undefined && error.status >= 500);
+  // 413 = permintaan melebihi batas token Groq; Gemini punya jendela konteks jauh lebih besar.
+  return error.status === 408 || error.status === 413 || error.status === 429 || (error.status !== undefined && error.status >= 500);
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> {
@@ -134,9 +135,9 @@ async function groqChat(system: string, history: ChatTurn[], message: string, ti
   });
 
   if (!response.ok) {
-    if (response.status === 429) {
+    if (response.status === 429 || response.status === 413) {
       const detail = await response.text().catch(() => '');
-      console.warn('[CAVA AI] Groq 429 detail:', detail.slice(0, 300), '| retry-after:', response.headers.get('retry-after'));
+      console.warn(`[CAVA AI] Groq ${response.status} detail:`, detail.slice(0, 300), '| retry-after:', response.headers.get('retry-after'));
     }
     throw new ProviderError(`Groq mengembalikan HTTP ${response.status}.`, response.status);
   }

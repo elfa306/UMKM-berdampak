@@ -65,7 +65,17 @@ function safeHistory(value: unknown): ChatTurn[] {
   });
 }
 
-async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof getOwnerContext>>>['userClient'], userId: string) {
+// Batas ukuran konteks usaha (karakter JSON). System prompt sendiri sudah ~12.000 karakter,
+// jadi konteks dijaga kecil agar tidak melewati batas token per permintaan Groq (HTTP 413).
+const MAX_CONTEXT_CHARS = 14_000;
+const CONTEXT_LIMITS = [
+  { produk: 50, transaksi: 40, resep: 20 },
+  { produk: 30, transaksi: 20, resep: 10 },
+  { produk: 15, transaksi: 10, resep: 5 },
+];
+const STOP_WORDS = new Set(['dan', 'yang', 'untuk', 'dari', 'saya', 'ini', 'itu', 'ubah', 'hapus', 'catat', 'tambah', 'harga', 'produk', 'rupiah', 'ribu', 'juta', 'tolong', 'dengan', 'jadi', 'buat', 'batalkan', 'transaksi']);
+
+async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof getOwnerContext>>>['userClient'], userId: string, message: string) {
   const end = new Date();
   const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
   const startIso = start.toISOString();
@@ -183,7 +193,24 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
     })),
   }));
 
-  return {
+  // Data yang disebut pengguna didahulukan (supaya produk/transaksi yang dimaksud tetap ada di konteks).
+  const queryWords = message.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 3 && !STOP_WORDS.has(word));
+  const mentioned = (text: string | null | undefined) => {
+    const lower = String(text ?? '').toLowerCase();
+    return queryWords.some((word) => lower.includes(word));
+  };
+  const pickTransactions = (limit: number) => {
+    const matched = transactionRows.filter((row) => mentioned(row.keterangan)).slice(0, Math.ceil(limit / 2));
+    const seen = new Set(matched.map((row) => row.id));
+    return [...matched, ...transactionRows.filter((row) => !seen.has(row.id)).slice(0, limit - matched.length)];
+  };
+  const pickByName = <T extends { id: string; nama: string | null }>(rows: T[], limit: number) => {
+    const matched = rows.filter((row) => mentioned(row.nama));
+    const seen = new Set(matched.map((row) => row.id));
+    return [...matched, ...rows.filter((row) => !seen.has(row.id))].slice(0, limit);
+  };
+
+  const build = (limit: { produk: number; transaksi: number; resep: number }) => ({
     periode: { mulai: startDate, sampai: endDate, zonaWaktu: 'Asia/Jakarta' },
     saldoBukuSaatIni: balancesResult.error ? null : {
       kas: Number((balancesResult.data as Record<string, unknown> | null)?.cash_balance ?? 0),
@@ -191,7 +218,7 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
     },
     saldoAwalUsaha: openingResult.error ? 'tidak dapat diverifikasi' : openingResult.data ? { kas: Number(openingResult.data.cash_amount), bankQris: Number(openingResult.data.bank_amount), dicatatPada: openingResult.data.recorded_at } : null,
     aktivitasHarian: { tanggal: endDate, sudahDibuka: Boolean(todaySessionResult.data?.id) },
-    transaksiTerbaru: transactionRows.slice(0, 80).map((row) => ({
+    transaksiTerbaru: pickTransactions(limit.transaksi).map((row) => ({
       id: row.id, jenis: row.jenis, keterangan: String(row.keterangan ?? '').slice(0, 100), jumlah: Number(row.jumlah ?? 0),
       tanggal: new Date(row.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }), metode: row.metode,
     })),
@@ -216,9 +243,19 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
       produkTerlarisBerdasarkanKuantitas: [...salesByProduct.entries()].map(([nama, value]) => ({ nama, ...value })).sort((a, b) => b.qty - a.qty).slice(0, 5),
       pengeluaranTerbesar: [...expensesByName.entries()].map(([keterangan, jumlah]) => ({ keterangan, jumlah })).sort((a, b) => b.jumlah - a.jumlah).slice(0, 5),
     },
-    katalogProduk: products.slice(0, 100),
-    resepProduksiAktif: productionRecipes,
-  };
+    katalogProduk: pickByName(products, limit.produk),
+    resepProduksiAktif: pickByName(productionRecipes, limit.resep),
+    catatanKonteks: products.length > limit.produk || transactionRows.length > limit.transaksi || productionRecipes.length > limit.resep
+      ? `Daftar produk, transaksi, dan resep dipangkas (total produk aktif ${products.length}). Bila data yang disebut pengguna tidak ada di daftar, minta nama lengkapnya dan jangan menebak.`
+      : null,
+  });
+
+  let result = build(CONTEXT_LIMITS[0]);
+  for (const limit of CONTEXT_LIMITS) {
+    result = build(limit);
+    if (JSON.stringify(result).length <= MAX_CONTEXT_CHARS) break;
+  }
+  return result;
 }
 
 export async function POST(request: Request) {
@@ -231,8 +268,10 @@ export async function POST(request: Request) {
     const message = typeof body?.message === 'string' ? body.message.trim() : '';
     if (!message || message.length > 1200) return NextResponse.json({ error: 'Pesan harus diisi dan maksimal 1.200 karakter.' }, { status: 400 });
 
-    const context = await businessContext(ctx.userClient, ctx.user.id);
-    const system = SYSTEM_PROMPT.replace('{{BUSINESS_CONTEXT}}', JSON.stringify(context));
+    const context = await businessContext(ctx.userClient, ctx.user.id, message);
+    const contextJson = JSON.stringify(context);
+    console.info(`[CAVA AI] konteks ${contextJson.length} karakter, prompt total ~${contextJson.length + SYSTEM_PROMPT.length} karakter`);
+    const system = SYSTEM_PROMPT.replace('{{BUSINESS_CONTEXT}}', contextJson);
     const { result, provider } = await generateAssistantReply(system, safeHistory(body?.history), message);
     const actionToken = signAssistantActions(ctx.user.id, result.actions);
     return NextResponse.json({ ...result, provider, actionToken }, { headers: { 'Cache-Control': 'no-store' } });
