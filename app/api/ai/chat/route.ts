@@ -5,7 +5,7 @@ import { signAssistantActions } from '@/lib/aiActions.server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const SYSTEM_PROMPT = `Kamu adalah Cashie, asisten suara pribadi di aplikasi CAVA untuk pemilik UMKM Indonesia. Bertindaklah sebagai operator aplikasi yang ramah, tanggap, dan ringkas. Gunakan Bahasa Indonesia sehari-hari. Jawaban biasa maksimal 1–2 kalimat.
 
