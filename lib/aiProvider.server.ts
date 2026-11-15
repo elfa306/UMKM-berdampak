@@ -1,4 +1,4 @@
-export type ProviderName = 'groq' | 'gemini' | 'openrouter' | 'freellm';
+export type ProviderName = 'groq' | 'gemini' | 'openrouter';
 export type ChatRole = 'user' | 'assistant';
 export type ChatTurn = { role: ChatRole; content: string };
 
@@ -59,11 +59,10 @@ class ProviderError extends Error {
   }
 }
 
-// Batas total percakapan Cashie 50 detik; route Vercel diberi batas 60 detik.
-// Sisakan waktu untuk fallback langsung bila FreeLLM gateway sedang tidak tersedia.
-const CHAT_BUDGET_MS = 50_000;
+// Anggaran waktu per permintaan. Harus lebih kecil dari `maxDuration` route masing-masing
+// (chat = 30 dtk, transcribe = 60 dtk) supaya fallback ke Gemini/OpenRouter sempat berjalan.
+const CHAT_BUDGET_MS = 26_000;
 const TRANSCRIBE_BUDGET_MS = 50_000;
-const FREELLM_CHAT_MS = 34_000;
 // Groq biasanya menjawab dalam hitungan detik; bila diam lebih dari ini, langsung pindah ke Gemini.
 const GROQ_CHAT_MS = 9_000;
 const GROQ_TRANSCRIBE_MS = 12_000;
@@ -284,120 +283,24 @@ async function openRouterChat(system: string, history: ChatTurn[], message: stri
   return content;
 }
 
-
-/**
- * Jalur utama chat Cashie melalui FreeLLM Gateway.
- * FREELLM_API_URL harus berupa base URL OpenAI-compatible yang berakhir dengan /v1.
- * Kredensial gateway selalu disimpan sebagai environment variable server-only.
- */
-async function freeLlmChat(
-  system: string,
-  history: ChatTurn[],
-  message: string,
-  timeoutMs: number,
-): Promise<{ content: string; provider: ProviderName }> {
-  const baseUrl = process.env.FREELLM_API_URL?.trim().replace(/\/+$/, '');
-  const key = process.env.FREELLM_API_KEY?.trim();
-  if (!baseUrl || !key) {
-    throw new ProviderError('Atur FREELLM_API_URL dan FREELLM_API_KEY secara bersamaan.', 503);
-  }
-
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: process.env.FREELLM_MODEL || 'auto',
-      temperature: 0.2,
-      max_tokens: 600,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: system },
-        ...history.map((turn) => ({ role: turn.role, content: turn.content })),
-        { role: 'user', content: message },
-      ],
-    }),
-    signal: AbortSignal.timeout(timeoutMs),
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    console.warn(`[CAVA AI] FreeLLM gateway HTTP ${response.status}:`, detail.slice(0, 350));
-    if (response.status === 401) {
-      throw new ProviderError('Gateway API Key FreeLLM tidak valid. Periksa FREELLM_API_KEY di Vercel.', 401);
-    }
-    throw new ProviderError(`FreeLLM Gateway mengembalikan HTTP ${response.status}.`, response.status);
-  }
-
-  const data = await response.json();
-  if (data?.error) {
-    const detail = typeof data.error.message === 'string' ? data.error.message.slice(0, 220) : 'respons memuat error';
-    throw new ProviderError(`FreeLLM Gateway: ${detail}`, Number(data.error.code) || 502);
-  }
-
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) {
-    throw new ProviderError('FreeLLM Gateway tidak mengirim teks jawaban.', 502);
-  }
-
-  const upstream = (response.headers.get('x-freellm-provider') || '').toLowerCase();
-  const provider: ProviderName =
-    upstream === 'groq' ? 'groq'
-    : upstream === 'google' || upstream === 'gemini' ? 'gemini'
-    : upstream === 'openrouter' ? 'openrouter'
-    : 'freellm';
-
-  console.info(
-    `[CAVA AI] FreeLLM gateway ok provider=${upstream || 'unknown'} model=${response.headers.get('x-freellm-model') || data?.model || 'unknown'}`,
-  );
-  return { content, provider };
-}
-
 export async function generateAssistantReply(
   system: string,
   history: ChatTurn[],
   message: string,
 ): Promise<{ result: AssistantResult; provider: ProviderName }> {
   let raw = '';
-  let provider: ProviderName = 'freellm';
+  let provider: ProviderName = 'groq';
   let lastError: unknown;
   const deadline = Date.now() + CHAT_BUDGET_MS;
-  const hasFreeLlmConfig = Boolean(process.env.FREELLM_API_URL?.trim() || process.env.FREELLM_API_KEY?.trim());
   const hasGroq = Boolean(process.env.GROQ_API_KEY);
   const hasGemini = Boolean(process.env.GEMINI_API_KEY);
   const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
 
-  // FreeLLM menjadi jalur utama dan mengatur routing/fallback Groq -> Gemini di sisi gateway.
-  // Jika gateway gagal (selain kredensial 401), provider langsung yang sudah ada tetap menjadi cadangan.
-  if (hasFreeLlmConfig) {
-    const remaining = deadline - Date.now();
-    if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    const gatewayTimeout = Math.min(FREELLM_CHAT_MS, remaining - MIN_FALLBACK_MS);
+  // Urutan provider chat: Groq utama, Gemini cadangan pertama, OpenRouter Free cadangan terakhir.
+  if (hasGroq) {
     try {
-      const gatewayResult = await timed(
-        'chat freellm',
-        () => freeLlmChat(system, history, message, gatewayTimeout),
-      );
-      raw = gatewayResult.content;
-      provider = gatewayResult.provider;
-    } catch (error) {
-      lastError = error;
-      if (!canFallback(error)) throw error;
-    }
-  }
-
-  // Fallback tingkat kedua: provider langsung CAVA, hanya dipakai ketika FreeLLM tidak berhasil.
-  if (!raw && hasGroq) {
-    const remaining = deadline - Date.now();
-    if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    const groqMs = hasGemini || hasOpenRouter
-      ? Math.max(1, Math.min(GROQ_CHAT_MS, remaining - MIN_FALLBACK_MS))
-      : remaining;
-    try {
-      raw = await timed('chat groq direct fallback', () => groqChat(system, history, message, groqMs));
+      const groqMs = hasGemini || hasOpenRouter ? GROQ_CHAT_MS : CHAT_BUDGET_MS;
+      raw = await timed('chat groq', () => groqChat(system, history, message, groqMs));
       provider = 'groq';
     } catch (error) {
       lastError = error;
