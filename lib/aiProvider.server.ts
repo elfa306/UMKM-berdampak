@@ -96,7 +96,8 @@ async function timed<T>(label: string, task: () => Promise<T>): Promise<T> {
 function canFallback(error: unknown): boolean {
   if (!(error instanceof ProviderError)) return true;
   // 413 = permintaan melebihi batas token Groq; Gemini punya jendela konteks jauh lebih besar.
-  return error.status === 408 || error.status === 413 || error.status === 429 || (error.status !== undefined && error.status >= 500);
+  // 400 = Groq menolak isi permintaan (mis. JSON tidak valid, model/format tidak diterima); Gemini bisa tetap menjawab.
+  return error.status === 400 || error.status === 408 || error.status === 413 || error.status === 429 || (error.status !== undefined && error.status >= 500);
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> {
@@ -136,10 +137,8 @@ async function groqChat(system: string, history: ChatTurn[], message: string, ti
   });
 
   if (!response.ok) {
-    if (response.status === 429 || response.status === 413) {
-      const detail = await response.text().catch(() => '');
-      console.warn(`[CAVA AI] Groq ${response.status} detail:`, detail.slice(0, 300), '| retry-after:', response.headers.get('retry-after'));
-    }
+    const detail = await response.text().catch(() => '');
+    console.warn(`[CAVA AI] Groq chat ${response.status} detail:`, detail.slice(0, 400), '| retry-after:', response.headers.get('retry-after'));
     throw new ProviderError(`Groq mengembalikan HTTP ${response.status}.`, response.status);
   }
   const data = await response.json();
@@ -580,7 +579,11 @@ async function groqTranscribe(audio: File, timeoutMs: number): Promise<string> {
     body: form,
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!response.ok) throw new ProviderError(`Transkripsi Groq gagal (HTTP ${response.status}).`, response.status);
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    console.warn(`[CAVA AI] Groq transkripsi ${response.status} detail:`, detail.slice(0, 400), `| file: ${audio.type || '?'} ${audio.size}B`);
+    throw new ProviderError(`Transkripsi Groq gagal (HTTP ${response.status}).`, response.status);
+  }
   const data = await response.json();
   const text = typeof data?.text === 'string' ? data.text.trim() : '';
   if (!text) throw new Error('Suara belum berhasil dikenali. Coba bicara sedikit lebih jelas.');
