@@ -296,7 +296,7 @@ async function freeLlmChat(
   message: string,
   timeoutMs: number,
 ): Promise<{ content: string; provider: ProviderName }> {
-  const baseUrl = process.env.FREELLM_API_URL?.trim().replace(/\\/+$/, '');
+  const baseUrl = process.env.FREELLM_API_URL?.trim().replace(/\/+$/, '');
   const key = process.env.FREELLM_API_KEY?.trim();
   if (!baseUrl || !key) {
     throw new ProviderError('Atur FREELLM_API_URL dan FREELLM_API_KEY secara bersamaan.', 503);
