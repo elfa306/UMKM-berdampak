@@ -62,6 +62,33 @@ function shortError(error: unknown): string {
   return message;
 }
 
+const NAV_ROUTES: Array<{ path: string; label: string; pattern: RegExp }> = [
+  { path: '/kasir', label: 'Beranda', pattern: /\b(beranda|kasir)\b/ },
+  { path: '/laporan', label: 'Riwayat dan Laporan', pattern: /\blaporan\b/ },
+  { path: '/pembiayaan', label: 'Rekomendasi Pembiayaan', pattern: /\bpembiayaan\b/ },
+  { path: '/inventaris', label: 'Katalog Produk', pattern: /\b(katalog|inventaris)\b/ },
+  { path: '/harga', label: 'Cek Harga Bahan', pattern: /\bharga bahan\b|\bcek harga\b/ },
+  { path: '/lainnya', label: 'Pengaturan dan Akun', pattern: /\bpengaturan dan akun\b/ },
+  { path: '/pengaturan-usaha', label: 'Profil Usaha', pattern: /\b(profil usaha|pengaturan usaha)\b/ },
+  { path: '/integrasi', label: 'Integrasi', pattern: /\bintegrasi\b/ },
+  { path: '/riwayat', label: 'Riwayat', pattern: /\briwayat\b(?! dan laporan)/ },
+  { path: '/statistik', label: 'Statistik', pattern: /\bstatistik\b/ },
+  { path: '/kredit', label: 'Kredit', pattern: /\bkredit\b/ },
+  { path: '/rekomendasi', label: 'Rekomendasi', pattern: /\brekomendasi\b(?! pembiayaan)/ },
+];
+
+// Jalan pintas tanpa LLM: hanya dipakai bila kalimat pendek, ada kata kerja buka/lihat,
+// dan tepat satu halaman cocok. Selain itu perintah diteruskan ke LLM seperti biasa.
+function matchLocalNavigation(raw: string): { path: string; label: string } | null {
+  const text = raw.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ').trim().replace(/\s+/g, ' ');
+  if (!text || text.split(' ').length > 8) return null;
+  if (!/\b(buka|bukakan|bukain|lihat|lihatkan|tampilkan|tunjukkan|tunjukin|menuju|pergi ke|ke halaman)\b/.test(text)) return null;
+  if (/\b(demo|catat|ubah|hapus|tambah|batal|simpan|bayar|unduh|ekspor|export|download|excel|bulan|form|manual|dan|lalu|terus|kemudian)\b|\d/.test(text.replace('pengaturan dan akun', 'pengaturan_akun').replace('riwayat dan laporan', 'riwayat_laporan'))) return null;
+  const matches = NAV_ROUTES.filter((route) => route.pattern.test(text));
+  return matches.length === 1 ? { path: matches[0].path, label: matches[0].label } : null;
+}
+
 function confirmationChoice(raw: string): 'yes' | 'no' | 'unclear' {
   const normalized = raw.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ').trim().replace(/\s+/g, ' ');
@@ -238,6 +265,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const [loadingSpeech, setLoadingSpeech] = useState(false);
   const [speechProgress, setSpeechProgress] = useState<SpeechProgress | null>(null);
   const [micLevels, setMicLevels] = useState<number[]>(EMPTY_WAVEFORM);
+  const [userSaid, setUserSaid] = useState<string | null>(null);
 
   const historyRef = useRef<Message[]>([]);
   const pendingRef = useRef<PendingAction[]>([]);
@@ -287,6 +315,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       if (activeSpeechTextRef.current === card.text || stickyResponseRef.current) return;
       responseRef.current = null;
       setResponse(null);
+      setUserSaid(null);
     }, delay);
   }, []);
 
@@ -468,7 +497,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     };
 
     const context = audioContextRef.current;
-    const cached = audioCacheRef.current.get(id);
+    const cached = audioCacheRef.current.get(text);
     if (cached && context) {
       try {
         await playClip(cached, context);
@@ -500,7 +529,11 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         buffer: decoded,
         cues: buildSpeechCues(text, body.alignment, decoded.duration),
       };
-      audioCacheRef.current.set(id, clip);
+      if (audioCacheRef.current.size >= 40) {
+        const oldest = audioCacheRef.current.keys().next().value;
+        if (oldest !== undefined) audioCacheRef.current.delete(oldest);
+      }
+      audioCacheRef.current.set(text, clip);
       if (speechRequestRef.current !== requestId) return;
       await playClip(clip, activeContext);
     } catch (error) {
@@ -510,7 +543,14 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       setSpeechProgress(null);
       activeSpeechTextRef.current = null;
       const message = error instanceof Error ? error.message : 'Suara ElevenLabs belum tersedia.';
-      showResponse(message, 'error', true);
+      const currentCard = responseRef.current;
+      if (currentCard?.text === text) {
+        // Teks jawaban (mis. konfirmasi transaksi) tetap tampil; suara saja yang gagal.
+        console.warn('[CAVA] Suara tidak tersedia:', message);
+        if (!stickyResponseRef.current) scheduleResponseDismiss(currentCard, 8_000);
+      } else {
+        showResponse(message, 'error', true);
+      }
     }
   }, [getAccessToken, scheduleResponseDismiss, showResponse, stopCurrentSpeech, unlockAudio]);
 
@@ -680,10 +720,22 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     clearResponse();
 
     const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content: message };
-    const previous = historyRef.current.slice(-8).map(({ role, content }) => ({ role, content }));
+    const previous = historyRef.current.slice(-4).map(({ role, content }) => ({ role, content }));
     historyRef.current = [...historyRef.current, userMessage].slice(-12);
 
     try {
+      const localRoute = matchLocalNavigation(message);
+      if (localRoute) {
+        setPendingItems([]);
+        router.push(localRoute.path);
+        const text = `Baik, saya buka ${localRoute.label}.`;
+        const assistantMessage: Message = { id: crypto.randomUUID(), role: 'assistant', content: text };
+        historyRef.current = [...historyRef.current, assistantMessage].slice(-12);
+        showResponse(text, 'answer');
+        if (voiceEnabledRef.current) void speakText(assistantMessage.id, text);
+        return;
+      }
+
       const token = await getAccessToken();
       const result = await fetch('/api/ai/chat', {
         method: 'POST',
@@ -800,6 +852,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       if (!result.ok) throw new Error(body.error || 'Suara belum berhasil dikenali.');
       const transcript = typeof body.transcript === 'string' ? body.transcript.trim() : '';
       if (!transcript) throw new Error('Ucapan belum terdengar jelas. Silakan coba lagi.');
+      setUserSaid(transcript);
       await handleRecognizedText(transcript);
     } catch (err) {
       const message = shortError(err);
@@ -1087,17 +1140,22 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
                   <div className="min-w-0"><p className="text-[10px] font-extrabold tracking-wide text-[#103A57]">Cashie</p><p className="text-[9px] font-semibold text-[#78909A]">Asisten CAVA</p></div>
                   {response?.kind === 'confirm' && <span className="rounded-full bg-[#FFF4D9] px-2 py-0.5 text-[9px] font-bold text-[#805600]">Konfirmasi</span>}
                 </div>
+                {userSaid && (phase === 'thinking' || phase === 'transcribing' || response !== null) && (
+                  <p className="mb-1 text-[10px] font-semibold leading-snug text-[#66808A]">Kamu: “{userSaid}”</p>
+                )}
                 {isPreparingResponseAudio ? (
-                  <p className="text-[12px] leading-[1.55] text-[#78909A]">Cashie sedang menyiapkan jawaban suara…</p>
+                  <p className="text-[12px] leading-[1.55] text-[#24475A]">{currentText}</p>
                 ) : isPlayingResponseAudio ? (
                   <p className="text-[12px] leading-[1.75] text-[#24475A]" aria-label="Teks jawaban Cashie mengikuti suara yang sedang diputar">
-                    {progressiveChunks.slice(0, speechProgress?.visibleCount ?? 0).map((chunk, index) => (
-                      <span
-                        key={`${index}-${chunk.display}`}
-                        className={speechProgress?.activeIndex === index ? 'rounded bg-[#DCEFE5] px-0.5 font-extrabold text-[#103A57] transition-colors' : ''}
-                      >{index > 0 ? ' ' : ''}{chunk.display}</span>
-                    ))}
-                    {speechProgress?.visibleCount === 0 && <span className="text-[#9AAEB5]">…</span>}
+                    {progressiveChunks.map((chunk, index) => {
+                      const visible = index < (speechProgress?.visibleCount ?? 0);
+                      return (
+                        <span
+                          key={`${index}-${chunk.display}`}
+                          className={speechProgress?.activeIndex === index ? 'rounded bg-[#DCEFE5] px-0.5 font-extrabold text-[#103A57] transition-colors' : visible ? '' : 'text-[#9AAEB5]'}
+                        >{index > 0 ? ' ' : ''}{chunk.display}</span>
+                      );
+                    })}
                   </p>
                 ) : (
                   <p className="text-[12px] leading-[1.55] text-[#24475A]">{currentText}</p>

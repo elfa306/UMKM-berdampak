@@ -58,7 +58,7 @@ Jangan sertakan markdown atau teks di luar JSON.`;
 
 function safeHistory(value: unknown): ChatTurn[] {
   if (!Array.isArray(value)) return [];
-  return value.slice(-8).flatMap((item): ChatTurn[] => {
+  return value.slice(-4).flatMap((item): ChatTurn[] => {
     if (!item || typeof item !== 'object') return [];
     const row = item as Record<string, unknown>;
     if ((row.role !== 'user' && row.role !== 'assistant') || typeof row.content !== 'string') return [];
@@ -77,7 +77,25 @@ const CONTEXT_LIMITS = [
 ];
 const STOP_WORDS = new Set(['dan', 'yang', 'untuk', 'dari', 'saya', 'ini', 'itu', 'ubah', 'hapus', 'catat', 'tambah', 'harga', 'produk', 'rupiah', 'ribu', 'juta', 'tolong', 'dengan', 'jadi', 'buat', 'batalkan', 'transaksi']);
 
-async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof getOwnerContext>>>['userClient'], userId: string, message: string) {
+// Bila transkrip jelas tidak menyangkut produk/resep, katalog dan resep tidak perlu dikirim penuh.
+// Kata kunci sengaja luas: kalau ragu, prompt dan konteks lengkap yang dipakai.
+const PRODUCT_INTENT = /produk|katalog|resep|produksi|batch|stok|harga|hpp|bahan|barang|sku|satuan|kategori|jenis|item|menu|bikin|baru|ubah|ganti|edit|hapus|tambah|nonaktif|aktif|jual|beli|pcs|porsi|cup|kg|liter/i;
+const hasProductIntent = (message: string) => PRODUCT_INTENT.test(message);
+
+// Bagian kemampuan 4–8 (produk, resep, batch produksi) hanya dimuat bila relevan.
+function buildSystemPrompt(contextJson: string, productIntent: boolean) {
+  let prompt = SYSTEM_PROMPT;
+  if (!productIntent) {
+    const start = prompt.indexOf('\n4. TAMBAH PRODUK.');
+    const end = prompt.indexOf('\n9. PERBARUI PROFIL USAHA.');
+    if (start !== -1 && end > start) {
+      prompt = `${prompt.slice(0, start)}\n4–8. (Fitur produk, resep, dan produksi tidak dimuat untuk perintah ini. Bila pengguna ternyata memintanya, minta ia mengulang dengan menyebut nama produk atau resepnya; jangan membuat action.)${prompt.slice(end)}`;
+    }
+  }
+  return prompt.replace('{{BUSINESS_CONTEXT}}', contextJson);
+}
+
+async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof getOwnerContext>>>['userClient'], userId: string, message: string, productIntent = true) {
   const end = new Date();
   const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
   const startIso = start.toISOString();
@@ -256,8 +274,9 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
       : null,
   });
 
-  let result = build(CONTEXT_LIMITS[0]);
-  for (const limit of CONTEXT_LIMITS) {
+  const limits = productIntent ? CONTEXT_LIMITS : [{ produk: 5, transaksi: 25, resep: 0 }, ...CONTEXT_LIMITS];
+  let result = build(limits[0]);
+  for (const limit of limits) {
     result = build(limit);
     if (JSON.stringify(result).length <= MAX_CONTEXT_CHARS) break;
   }
@@ -274,10 +293,11 @@ export async function POST(request: Request) {
     const message = typeof body?.message === 'string' ? body.message.trim() : '';
     if (!message || message.length > 1200) return NextResponse.json({ error: 'Pesan harus diisi dan maksimal 1.200 karakter.' }, { status: 400 });
 
-    const context = await businessContext(ctx.userClient, ctx.user.id, message);
+    const productIntent = hasProductIntent(message);
+    const context = await businessContext(ctx.userClient, ctx.user.id, message, productIntent);
     const contextJson = JSON.stringify(context);
-    console.info(`[CAVA AI] konteks ${contextJson.length} karakter, prompt total ~${contextJson.length + SYSTEM_PROMPT.length} karakter`);
-    const system = SYSTEM_PROMPT.replace('{{BUSINESS_CONTEXT}}', contextJson);
+    console.info(`[CAVA AI] konteks ${contextJson.length} karakter, prompt total ~${contextJson.length + SYSTEM_PROMPT.length} karakter (produk=${productIntent})`);
+    const system = buildSystemPrompt(contextJson, productIntent);
     const { result, provider } = await generateAssistantReply(system, safeHistory(body?.history), message);
     const actionToken = signAssistantActions(ctx.user.id, result.actions);
     return NextResponse.json({ ...result, provider, actionToken }, { headers: { 'Cache-Control': 'no-store' } });
