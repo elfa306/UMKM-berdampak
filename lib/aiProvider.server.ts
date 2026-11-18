@@ -67,6 +67,8 @@ const TRANSCRIBE_BUDGET_MS = 50_000;
 const GROQ_CHAT_MS = 9_000;
 const GROQ_TRANSCRIBE_MS = 12_000;
 const MIN_FALLBACK_MS = 4_000;
+// Gemini yang sehat menjawab dalam beberapa detik; log produksi menunjukkan timeout 18 detik sia-sia.
+const GEMINI_CHAT_MS = 6_000;
 
 export const TIMEOUT_MESSAGE = 'Layanan AI sedang lambat. Coba tahan tombol V dan ucapkan lagi.';
 
@@ -115,7 +117,7 @@ function parseJsonObject(raw: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-async function groqChat(system: string, history: ChatTurn[], message: string, timeoutMs: number): Promise<string> {
+async function groqChat(system: string, history: ChatTurn[], message: string, timeoutMs: number, modelOverride?: string): Promise<string> {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new ProviderError('GROQ_API_KEY belum diatur.');
 
@@ -123,7 +125,7 @@ async function groqChat(system: string, history: ChatTurn[], message: string, ti
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: process.env.GROQ_MODEL || 'openai/gpt-oss-20b',
+      model: modelOverride || process.env.GROQ_MODEL || 'openai/gpt-oss-20b',
       temperature: 0.2,
       max_tokens: 600,
       response_format: { type: 'json_object' },
@@ -289,6 +291,7 @@ export async function generateAssistantReply(
   message: string,
 ): Promise<{ result: AssistantResult; provider: ProviderName }> {
   let raw = '';
+  let parsedEarly: Record<string, unknown> | null = null;
   let provider: ProviderName = 'groq';
   let lastError: unknown;
   const deadline = Date.now() + CHAT_BUDGET_MS;
@@ -301,8 +304,25 @@ export async function generateAssistantReply(
     try {
       const groqMs = hasGemini || hasOpenRouter ? GROQ_CHAT_MS : CHAT_BUDGET_MS;
       raw = await timed('chat groq', () => groqChat(system, history, message, groqMs));
+      parsedEarly = parseJsonObject(raw);
       provider = 'groq';
     } catch (error) {
+      raw = ''; parsedEarly = null;
+      lastError = error;
+      if (!canFallback(error)) throw error;
+    }
+  }
+
+  // Cadangan Groq dengan model lain (batas token per menit dihitung per model). Opsional lewat env.
+  const groqFallbackModel = process.env.GROQ_FALLBACK_MODEL;
+  if (!raw && hasGroq && groqFallbackModel && groqFallbackModel !== (process.env.GROQ_MODEL || 'openai/gpt-oss-20b')
+    && lastError instanceof ProviderError && lastError.status === 429) {
+    try {
+      raw = await timed('chat groq-cadangan', () => groqChat(system, history, message, GROQ_CHAT_MS, groqFallbackModel));
+      parsedEarly = parseJsonObject(raw);
+      provider = 'groq';
+    } catch (error) {
+      raw = ''; parsedEarly = null;
       lastError = error;
       if (!canFallback(error)) throw error;
     }
@@ -314,11 +334,13 @@ export async function generateAssistantReply(
     // Bila OpenRouter juga aktif, sisakan hingga 8 detik untuk provider terakhir.
     // Jika sisa waktu terlalu sempit, langsung gunakan OpenRouter daripada menghabiskan budget pada Gemini.
     if (!hasOpenRouter || remaining >= MIN_FALLBACK_MS * 3) {
-      const geminiTimeout = hasOpenRouter ? remaining - 8_000 : remaining;
+      const geminiTimeout = hasOpenRouter ? Math.min(GEMINI_CHAT_MS, remaining - 8_000) : remaining;
       try {
         raw = await timed('chat gemini', () => geminiChat(system, history, message, geminiTimeout));
+        parsedEarly = parseJsonObject(raw);
         provider = 'gemini';
       } catch (error) {
+        raw = ''; parsedEarly = null;
         lastError = error;
         if (!canFallback(error)) throw error;
       }
@@ -338,7 +360,7 @@ export async function generateAssistantReply(
       : new Error('Atur GROQ_API_KEY, GEMINI_API_KEY, atau OPENROUTER_API_KEY untuk mengaktifkan AI.');
   }
 
-  const parsed = parseJsonObject(raw);
+  const parsed = parsedEarly ?? parseJsonObject(raw);
   let reply = typeof parsed.reply === 'string' ? parsed.reply.trim().slice(0, 1800) : '';
   const rawActions = Array.isArray(parsed.actions) ? parsed.actions : [];
   const allowedRoutes = new Map<string, string>([

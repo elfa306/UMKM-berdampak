@@ -79,8 +79,10 @@ const STOP_WORDS = new Set(['dan', 'yang', 'untuk', 'dari', 'saya', 'ini', 'itu'
 
 // Bila transkrip jelas tidak menyangkut produk/resep, katalog dan resep tidak perlu dikirim penuh.
 // Kata kunci sengaja luas: kalau ragu, prompt dan konteks lengkap yang dipakai.
-const PRODUCT_INTENT = /produk|katalog|resep|produksi|batch|stok|harga|hpp|bahan|barang|sku|satuan|kategori|jenis|item|menu|bikin|baru|ubah|ganti|edit|hapus|tambah|nonaktif|aktif|jual|beli|pcs|porsi|cup|kg|liter/i;
-const hasProductIntent = (message: string) => PRODUCT_INTENT.test(message);
+const PRODUCT_NOUNS = /produk|katalog|resep|produksi|batch|stok|hpp|sku|satuan|kategori|menu|barang|nonaktif/i;
+const PRODUCT_EDIT = /\b(tambah\w*|bikin\w*|buat\w*|ubah|ganti|edit|hapus)\b.*\b(produk|menu|bahan|barang|resep|harga|nama)\b/i;
+const TRANSACTION_FIX = /batal|hapus|salah|koreksi|ubah|ganti/i;
+const hasProductIntent = (message: string) => PRODUCT_NOUNS.test(message) || PRODUCT_EDIT.test(message);
 
 // Bagian kemampuan 4–8 (produk, resep, batch produksi) hanya dimuat bila relevan.
 function buildSystemPrompt(contextJson: string, productIntent: boolean) {
@@ -274,7 +276,7 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
       : null,
   });
 
-  const limits = productIntent ? CONTEXT_LIMITS : [{ produk: 5, transaksi: 25, resep: 0 }, ...CONTEXT_LIMITS];
+  const limits = productIntent ? CONTEXT_LIMITS : [{ produk: 5, transaksi: TRANSACTION_FIX.test(message) ? 25 : 8, resep: 0 }, ...CONTEXT_LIMITS];
   let result = build(limits[0]);
   for (const limit of limits) {
     result = build(limit);
@@ -296,8 +298,8 @@ export async function POST(request: Request) {
     const productIntent = hasProductIntent(message);
     const context = await businessContext(ctx.userClient, ctx.user.id, message, productIntent);
     const contextJson = JSON.stringify(context);
-    console.info(`[CAVA AI] konteks ${contextJson.length} karakter, prompt total ~${contextJson.length + SYSTEM_PROMPT.length} karakter (produk=${productIntent})`);
     const system = buildSystemPrompt(contextJson, productIntent);
+    console.info(`[CAVA AI] konteks ${contextJson.length} karakter, prompt total ${system.length} karakter (produk=${productIntent})`);
     const { result, provider } = await generateAssistantReply(system, safeHistory(body?.history), message);
     const actionToken = signAssistantActions(ctx.user.id, result.actions);
     return NextResponse.json({ ...result, provider, actionToken }, { headers: { 'Cache-Control': 'no-store' } });
