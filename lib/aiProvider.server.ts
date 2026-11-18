@@ -121,13 +121,20 @@ async function groqChat(system: string, history: ChatTurn[], message: string, ti
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new ProviderError('GROQ_API_KEY belum diatur.');
 
+  const model = modelOverride || process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
+  // Model gpt-oss memakai token "penalaran" yang ikut dihitung dari max_tokens. Tanpa pembatasan,
+  // penalaran bisa menghabiskan seluruh batas sebelum JSON selesai (Groq: json_validate_failed / HTTP 400).
+  // Bisa diubah lewat GROQ_REASONING_EFFORT (low | medium | high).
+  const reasoning = /gpt-oss/i.test(model) ? { reasoning_effort: process.env.GROQ_REASONING_EFFORT?.trim() || 'low' } : {};
+
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: modelOverride || process.env.GROQ_MODEL || 'openai/gpt-oss-20b',
+      model,
       temperature: 0.2,
       max_tokens: 600,
+      ...reasoning,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: system },
