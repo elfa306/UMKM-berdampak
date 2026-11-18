@@ -1,18 +1,27 @@
 import { supabase } from './supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Tx } from './accounting';
 
 export type Hari = { id: string; tanggal: string; modal: number; txs: Tx[] };
 
-// Ambil sesi harian + transaksi + HPP dari jurnal akuntansi pada rentang tanggal.
-export async function fetchHari(start: string, end: string): Promise<Hari[]> {
-  const { data: authData } = await supabase.auth.getUser();
-  const user = authData.user;
-  if (!user) return [];
+/** Dipakai route server: client berisi token pengguna (RLS tetap berlaku) beserta ID pengguna. */
+export type FetchHariSource = { client: SupabaseClient; userId: string };
 
-  const { data: ses, error } = await supabase
+// Ambil sesi harian + transaksi + HPP dari jurnal akuntansi pada rentang tanggal.
+// Tanpa `source`, memakai client browser dan pengguna yang sedang login (perilaku lama).
+export async function fetchHari(start: string, end: string, source?: FetchHariSource): Promise<Hari[]> {
+  const db = source?.client ?? supabase;
+  let userId = source?.userId;
+  if (!userId) {
+    const { data: authData } = await supabase.auth.getUser();
+    userId = authData.user?.id;
+  }
+  if (!userId) return [];
+
+  const { data: ses, error } = await db
     .from('daily_sessions')
     .select('id,tanggal,modal_harian')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .gte('tanggal', start)
     .lte('tanggal', end)
     .order('tanggal', { ascending: false });
@@ -22,10 +31,10 @@ export async function fetchHari(start: string, end: string): Promise<Hari[]> {
 
   const byId = new Map(hari.map((h) => [h.id, h]));
   for (let from = 0; ; from += 1000) {
-    const { data, error: e2 } = await supabase
+    const { data, error: e2 } = await db
       .from('transactions')
       .select('*, daily_sessions!inner(tanggal)')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .gte('daily_sessions.tanggal', start)
       .lte('daily_sessions.tanggal', end)
       .order('created_at')
@@ -40,10 +49,10 @@ export async function fetchHari(start: string, end: string): Promise<Hari[]> {
   const entryDates = new Map<string, string>();
   const entryIds: string[] = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error: entryError } = await supabase
+    const { data, error: entryError } = await db
       .from('journal_entries')
       .select('id,entry_date')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .gte('entry_date', start)
       .lte('entry_date', end)
       .order('entry_date')
@@ -59,10 +68,10 @@ export async function fetchHari(start: string, end: string): Promise<Hari[]> {
   const hppPerTanggal = new Map<string, number>();
   for (let i = 0; i < entryIds.length; i += 200) {
     const ids = entryIds.slice(i, i + 200);
-    const { data, error: lineError } = await supabase
+    const { data, error: lineError } = await db
       .from('journal_lines')
       .select('entry_id,debit,credit')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .in('entry_id', ids)
       .in('account_code', ['5000', '5100']);
     if (lineError) throw new Error(lineError.message);
