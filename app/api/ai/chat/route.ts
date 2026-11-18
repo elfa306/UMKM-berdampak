@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getOwnerContext, isSafeSameOrigin } from '@/lib/ownerApi.server';
 import { generateAssistantReply, publicAiError, type ChatTurn } from '@/lib/aiProvider.server';
 import { signAssistantActions } from '@/lib/aiActions.server';
+import { ringkasHargaBahan, ringkasPembiayaan } from '@/lib/ringkasanAsisten.server';
+import type { ProfilUsahaDB } from '@/lib/rekomendasiProfile';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,7 +25,7 @@ PRINSIP IZIN DAN KEAMANAN:
 - Jangan pernah mengklaim seluruh aplikasi dapat dikendalikan tanpa batas. Gunakan hanya action yang didefinisikan. Jika fitur tidak tersedia, jelaskan dan tawarkan membuka halaman terkait secara langsung tanpa konfirmasi karena navigasi tidak mengubah data.
 
 KEMAMPUAN:
-1. NAVIGASI LANGSUNG TANPA KONFIRMASI. Untuk permintaan melihat atau membuka halaman, gunakan action navigate dengan salah satu path tepat berikut. Aplikasi akan langsung berpindah halaman tanpa bertanya lagi:
+1. NAVIGASI LANGSUNG TANPA KONFIRMASI. PENTING: action navigate hanya untuk pengguna yang meminta MEMBUKA, MENAMPILKAN, atau PERGI ke sebuah halaman. Jika pengguna menanyakan isi, angka, ringkasan, atau kondisi (contoh: 'cek harga bahan hari ini', 'harga bahan naik atau turun?', 'bagaimana pembiayaan saya?', 'bank mana yang cocok?', 'berapa cicilannya?'), JANGAN navigasi: jawab dari konteks (hargaBahan, pembiayaan, ringkasan30Hari, saldo). Untuk permintaan melihat atau membuka halaman, gunakan action navigate dengan salah satu path tepat berikut. Aplikasi akan langsung berpindah halaman tanpa bertanya lagi:
 /kasir = Beranda/Kasir; /laporan = Riwayat dan Laporan; /pembiayaan = Rekomendasi Pembiayaan; /inventaris = Katalog Produk; /harga = Cek Harga Bahan; /lainnya = Pengaturan dan Akun; /pengaturan-usaha = Profil Usaha; /integrasi = Integrasi; /riwayat = Riwayat; /statistik = Statistik; /kredit = Kredit; /rekomendasi = Rekomendasi; /demo = Ruang Demo; /demo/akuntansi = Demo Akuntansi; /demo/analisis = Demo Analisis; /demo/inventaris = Demo Inventaris; /demo/kasir = Demo Kasir; /demo/persiapan = Persiapan Demo; /demo/produksi = Demo Produksi; /demo/ruang = Ruang Demo Interaktif.
 Contoh: 'lihat laporan', 'buka laporan', atau 'tampilkan laporan' menghasilkan navigate /laporan; 'buka katalog produk' menghasilkan navigate /inventaris; 'buka demo kasir' menghasilkan navigate /demo/kasir. Semua navigasi hanya membuka halaman, bukan mengubah data. Jangan membuat path lain. Halaman login, onboarding, dan reset password tidak boleh dibuka melalui Cashie. Halaman demo boleh dibuka sebagai navigasi, tetapi Cashie tidak mengubah data demo atau menjalankan aksi simulasi di dalamnya.
 2. BUKA FORM CATAT MANUAL. Jika diminta membuka pencatatan manual, gunakan open_manual_record dengan mode masuk, keluar, atau modal.
@@ -48,8 +50,12 @@ ATURAN TAMBAHAN:
 - Untuk semua action yang mengubah data (produk, produksi, profil, jurnal), isi reply singkat seperti 'Saya siapkan tindakan tersebut. Mohon periksa rincian dan konfirmasi.' Ringkasan detil akan dibuat oleh aplikasi.
 - Bila ada transaction action, isi reply singkat tanpa tanda tanya, misalnya 'Saya siapkan pencatatannya.'; ringkasan dan konfirmasi dibuat oleh aplikasi.
 - Untuk navigate/open_manual_record, gunakan reply singkat yang menyebut halaman/form yang dibuka; aplikasi menjalankannya langsung tanpa konfirmasi.
-- Untuk pertanyaan baca-saja seperti cek saldo, lihat pemasukan/pengeluaran, cari produk, lihat transaksi, laba, atau ringkasan laporan, jawab langsung dari konteks data tanpa action dan tanpa konfirmasi.
-- Untuk permintaan 'lihat/buka/tampilkan laporan' atau halaman fitur, gunakan navigate langsung. Untuk permintaan unduh/ekspor laporan, gunakan accounting_report_export dan jalankan unduhan langsung. Jangan meminta persetujuan untuk tindakan yang hanya membaca atau membuka data.
+- Untuk pertanyaan baca-saja seperti cek saldo, lihat pemasukan/pengeluaran, cari produk, lihat transaksi, laba, ringkasan laporan, cek harga bahan, atau ringkasan pembiayaan, jawab langsung dari konteks data tanpa action dan tanpa konfirmasi.
+- Untuk permintaan yang eksplisit meminta membuka/menampilkan halaman fitur atau laporan (bukan menanyakan isinya), gunakan navigate langsung. Untuk permintaan unduh/ekspor laporan, gunakan accounting_report_export dan jalankan unduhan langsung. Jangan meminta persetujuan untuk tindakan yang hanya membaca atau membuka data.
+- HARGA BAHAN: konteks hargaBahan hanya ada bila pengguna menyinggung harga bahan. Jawab langsung dari data itu tanpa action. Aplikasi hanya menampilkan dan membacakan KALIMAT PERTAMA reply (maksimal 22 kata), jadi kalimat pertama harus memuat hal terpenting: bahan yang paling naik atau turun beserta persennya, atau bahwa harga relatif stabil. Bila hariIni=false, sebut tanggalData. Bila tersedia=false, jelaskan alasannya dalam satu kalimat. Jangan membuat navigate kecuali pengguna meminta membuka halamannya.
+- PEMBIAYAAN: konteks pembiayaan hanya ada bila pengguna menyinggung pembiayaan, pinjaman, atau modal usaha. Jawab langsung tanpa action. KALIMAT PERTAMA reply (maksimal 22 kata) harus memuat inti: skor dan grade kesehatan finansial beserta lembaga paling cocok dengan bunga dan cicilan per bulan; bila tidak ada yang layak, katakan itu. Bila ditanya lembaga tertentu, sebut bunga, cicilan, dan layak atau tidaknya. Data lembaga masih simulasi, sebut itu hanya bila ditanya atau relevan. Bila tersedia=false, jelaskan alasannya dalam satu kalimat. Jangan membuat navigate kecuali pengguna meminta membuka halamannya.
+- Tulis nominal dalam bentuk Rp17.500 atau 'Rp 17.500'. Jangan memakai titik di tempat lain di dalam kalimat pertama selain pemisah ribuan dan akhir kalimat.
+- Bila pengguna menanyakan harga bahan atau pembiayaan tetapi konteks tidak memuat hargaBahan atau pembiayaan, minta ia mengulang dengan menyebut 'harga bahan' atau 'pembiayaan'; jangan menebak angka.
 - Untuk pertanyaan biasa, jawab hanya dari konteks data yang tersedia. Jangan mengarang angka atau mengaku sudah membuka/mengubah sesuatu.
 
 FORMAT OUTPUT WAJIB JSON:
@@ -85,6 +91,12 @@ const PRODUCT_EDIT = /\b(tambah\w*|bikin\w*|buat\w*|ubah|ganti|edit|hapus)\b.*\b
 const TRANSACTION_FIX = /batal|hapus|salah|koreksi|ubah|ganti/i;
 const hasProductIntent = (message: string) => PRODUCT_NOUNS.test(message) || PRODUCT_EDIT.test(message);
 
+// Data halaman Cek Harga dan Pembiayaan hanya dimuat bila pertanyaannya menyinggung topik itu,
+// supaya Cashie bisa menjawab ringkasannya langsung tanpa membuka halaman.
+const HARGA_INTENT = /\bbahan\b|cek harga|harga (pasar|belanja|beli|hari ini|terbaru)|pantau/i;
+const PEMBIAYAAN_INTENT = /pembiayaan|pinjam|kredit|\bkur\b|bunga|cicil|plafon|skor|kesehatan finansial|rekomendasi|butuh modal|modal usaha|koperasi|pinjol|\bbpr/i;
+type ContextExtras = { harga: boolean; pembiayaan: boolean };
+
 // Bagian kemampuan 4–8 (produk, resep, batch produksi) hanya dimuat bila relevan.
 function buildSystemPrompt(contextJson: string, productIntent: boolean) {
   let prompt = SYSTEM_PROMPT;
@@ -98,7 +110,7 @@ function buildSystemPrompt(contextJson: string, productIntent: boolean) {
   return prompt.replace('{{BUSINESS_CONTEXT}}', contextJson);
 }
 
-async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof getOwnerContext>>>['userClient'], userId: string, message: string, productIntent = true) {
+async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof getOwnerContext>>>['userClient'], userId: string, message: string, productIntent = true, extras: ContextExtras = { harga: false, pembiayaan: false }) {
   const end = new Date();
   const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
   const startIso = start.toISOString();
@@ -130,6 +142,12 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
 
   if (txResult.error) throw new Error('Data transaksi tidak dapat dibaca. Periksa izin database CAVA.');
   if (productResult.error) throw new Error('Katalog produk tidak dapat dibaca.');
+
+  // Ringkasan halaman Cek Harga / Pembiayaan: hanya bila ditanyakan; kegagalan tidak boleh menggagalkan chat.
+  const [hargaBahan, pembiayaan] = await Promise.all([
+    extras.harga ? ringkasHargaBahan(userClient, userId, endDate).catch(() => null) : Promise.resolve(null),
+    extras.pembiayaan ? ringkasPembiayaan(userClient, userId, (profileResult.data ?? null) as ProfilUsahaDB | null, endDate).catch(() => null) : Promise.resolve(null),
+  ]);
 
   type TransactionRow = { id: string; jenis: string; keterangan: string | null; jumlah: number | string; metode: string | null; qty: number | null; created_at: string; payment_source: string | null; product_id: string | null };
   type ProductRow = { id: string; nama: string; kategori: string | null; jenis_item: string; harga: number | string | null; harga_pokok: number | string | null; sku: string | null; satuan: string | null; stok: number | string | null; lacak_stok: boolean };
@@ -245,6 +263,8 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
       sudahDibuka: Boolean(todaySessionResult.data?.id),
       modalHarian: todaySessionResult.data ? Number(todaySessionResult.data.modal_harian ?? 0) : null,
     },
+    ...(hargaBahan ? { hargaBahan } : {}),
+    ...(pembiayaan ? { pembiayaan } : {}),
     transaksiTerbaru: pickTransactions(limit.transaksi).map((row) => ({
       id: row.id, jenis: row.jenis, keterangan: String(row.keterangan ?? '').slice(0, 100), jumlah: Number(row.jumlah ?? 0),
       tanggal: new Date(row.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }), metode: row.metode,
@@ -307,10 +327,11 @@ export async function POST(request: Request) {
     if (!message || message.length > 1200) return NextResponse.json({ error: 'Pesan harus diisi dan maksimal 1.200 karakter.' }, { status: 400 });
 
     const productIntent = hasProductIntent(message);
-    const context = await businessContext(ctx.userClient, ctx.user.id, message, productIntent);
+    const extras: ContextExtras = { harga: HARGA_INTENT.test(message), pembiayaan: PEMBIAYAAN_INTENT.test(message) };
+    const context = await businessContext(ctx.userClient, ctx.user.id, message, productIntent, extras);
     const contextJson = JSON.stringify(context);
     const system = buildSystemPrompt(contextJson, productIntent);
-    console.info(`[CAVA AI] konteks ${contextJson.length} karakter, prompt total ${system.length} karakter (produk=${productIntent})`);
+    console.info(`[CAVA AI] konteks ${contextJson.length} karakter, prompt total ${system.length} karakter (produk=${productIntent}, harga=${extras.harga}, pembiayaan=${extras.pembiayaan})`);
     const history = safeHistory(body?.history);
     let { result, provider } = await generateAssistantReply(system, history, message);
     if (result.actions.length === 0 && isProseConfirmation(message, result.reply)) {
