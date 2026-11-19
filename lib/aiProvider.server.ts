@@ -59,16 +59,14 @@ class ProviderError extends Error {
   }
 }
 
-// Anggaran waktu per permintaan. Harus lebih kecil dari `maxDuration` route masing-masing
-// (chat = 30 dtk, transcribe = 60 dtk) supaya fallback ke Gemini/OpenRouter sempat berjalan.
+// Budget total chat tetap dibatasi oleh maxDuration route (30 detik).
+// Provider cadangan mulai secara bertahap, tidak menunggu timeout provider sebelumnya.
 const CHAT_BUDGET_MS = 26_000;
+const CHAT_HEDGE_DELAY_MS = 1_800;
+const CHAT_PROVIDER_TIMEOUT_MS = 18_000;
 const TRANSCRIBE_BUDGET_MS = 50_000;
-// Groq biasanya menjawab dalam hitungan detik; bila diam lebih dari ini, langsung pindah ke Gemini.
-const GROQ_CHAT_MS = 9_000;
 const GROQ_TRANSCRIBE_MS = 12_000;
 const MIN_FALLBACK_MS = 4_000;
-// Gemini yang sehat menjawab dalam beberapa detik; log produksi menunjukkan timeout 18 detik sia-sia.
-const GEMINI_CHAT_MS = 6_000;
 
 export const TIMEOUT_MESSAGE = 'Layanan AI sedang lambat. Coba tahan tombol V dan ucapkan lagi.';
 
@@ -83,16 +81,25 @@ export function publicAiError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-async function timed<T>(label: string, task: () => Promise<T>): Promise<T> {
+async function timed<T>(label: string, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const startedAt = Date.now();
   try {
     const value = await task();
     console.info(`[CAVA AI] ${label} ok ${Date.now() - startedAt}ms`);
     return value;
   } catch (error) {
+    if (signal?.aborted) {
+      console.info(`[CAVA AI] ${label} dibatalkan karena provider lain sudah dipilih (${Date.now() - startedAt}ms)`);
+      throw error;
+    }
     console.warn(`[CAVA AI] ${label} gagal ${Date.now() - startedAt}ms:`, error instanceof Error ? `${error.name}: ${error.message}` : error);
     throw isTimeoutError(error) ? new ProviderError(TIMEOUT_MESSAGE, 408) : error;
   }
+}
+
+function providerRequestSignal(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return parent ? AbortSignal.any([parent, timeoutSignal]) : timeoutSignal;
 }
 
 function canFallback(error: unknown): boolean {
@@ -117,7 +124,7 @@ function parseJsonObject(raw: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-async function groqChat(system: string, history: ChatTurn[], message: string, timeoutMs: number, modelOverride?: string): Promise<string> {
+async function groqChat(system: string, history: ChatTurn[], message: string, timeoutMs: number, signal?: AbortSignal, modelOverride?: string): Promise<string> {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new ProviderError('GROQ_API_KEY belum diatur.');
 
@@ -133,7 +140,7 @@ async function groqChat(system: string, history: ChatTurn[], message: string, ti
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      max_tokens: 600,
+      max_completion_tokens: 1200,
       ...reasoning,
       response_format: { type: 'json_object' },
       messages: [
@@ -142,7 +149,7 @@ async function groqChat(system: string, history: ChatTurn[], message: string, ti
         { role: 'user', content: message },
       ],
     }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: providerRequestSignal(signal, timeoutMs),
   });
 
   if (!response.ok) {
@@ -151,21 +158,38 @@ async function groqChat(system: string, history: ChatTurn[], message: string, ti
     throw new ProviderError(`Groq mengembalikan HTTP ${response.status}.`, response.status);
   }
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
+  const choice = data?.choices?.[0];
+  const finishReason = choice?.finish_reason;
+  if (finishReason === 'length') throw new ProviderError('Jawaban Groq terpotong sebelum JSON selesai.', 502);
+  const content = choice?.message?.content;
+  console.info(`[CAVA AI] groq finishReason=${finishReason ?? '-'} completionTokens=${data?.usage?.completion_tokens ?? '-'}`);
   if (typeof content !== 'string' || !content.trim()) throw new Error('Groq tidak memberikan jawaban.');
   return content;
 }
 
-/** Opsional: batasi "thinking" Gemini agar cepat. Isi GEMINI_THINKING_LEVEL (mis. low) ATAU GEMINI_THINKING_BUDGET (angka; 0 = mati) di .env.local. */
+/** Batasi thinking Gemini 2.5 agar tugas JSON singkat tidak menghabiskan budget output. */
 function geminiThinkingConfig(): { thinkingConfig?: Record<string, string | number> } {
-  const level = process.env.GEMINI_THINKING_LEVEL?.trim();
-  if (level) return { thinkingConfig: { thinkingLevel: level } };
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const level = process.env.GEMINI_THINKING_LEVEL?.trim()?.toLowerCase();
   const budget = process.env.GEMINI_THINKING_BUDGET?.trim();
+
+  if (/gemini-2\.5/i.test(model)) {
+    if (budget && Number.isFinite(Number(budget))) {
+      return { thinkingConfig: { thinkingBudget: Number(budget) } };
+    }
+    if (level) {
+      const levelBudgets: Record<string, number> = { minimal: 128, low: 256, medium: 1024, high: 4096 };
+      if (levelBudgets[level] !== undefined) return { thinkingConfig: { thinkingBudget: levelBudgets[level] } };
+    }
+    return { thinkingConfig: { thinkingBudget: 256 } };
+  }
+
+  if (level) return { thinkingConfig: { thinkingLevel: level.toUpperCase() } };
   if (budget && Number.isFinite(Number(budget))) return { thinkingConfig: { thinkingBudget: Number(budget) } };
   return {};
 }
 
-async function geminiChat(system: string, history: ChatTurn[], message: string, timeoutMs: number): Promise<string> {
+async function geminiChat(system: string, history: ChatTurn[], message: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new ProviderError('GEMINI_API_KEY belum diatur.');
   const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
@@ -188,10 +212,14 @@ async function geminiChat(system: string, history: ChatTurn[], message: string, 
         ...geminiThinkingConfig(),
       },
     }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: providerRequestSignal(signal, timeoutMs),
   });
 
-  if (!response.ok) throw new ProviderError(`Gemini mengembalikan HTTP ${response.status}.`, response.status);
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    console.warn(`[CAVA AI] Gemini chat ${response.status} detail:`, detail.slice(0, 500), '| retry-after:', response.headers.get('retry-after'));
+    throw new ProviderError(`Gemini mengembalikan HTTP ${response.status}.`, response.status);
+  }
   const data = await response.json();
   const finishReason = data?.candidates?.[0]?.finishReason;
   const usage = data?.usageMetadata;
@@ -202,7 +230,7 @@ async function geminiChat(system: string, history: ChatTurn[], message: string, 
   return content;
 }
 
-async function openRouterChat(system: string, history: ChatTurn[], message: string, timeoutMs: number): Promise<string> {
+async function openRouterChat(system: string, history: ChatTurn[], message: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new ProviderError('OPENROUTER_API_KEY belum diatur.');
   const model = process.env.OPENROUTER_MODEL || 'openrouter/free';
@@ -222,7 +250,7 @@ async function openRouterChat(system: string, history: ChatTurn[], message: stri
       provider: { require_parameters: true },
       response_format: { type: 'json_object' },
     }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: providerRequestSignal(signal, timeoutMs),
   });
 
   if (!response.ok) {
@@ -292,82 +320,208 @@ async function openRouterChat(system: string, history: ChatTurn[], message: stri
   return content;
 }
 
+type ProviderHealthState = {
+  averageLatencyMs: number | null;
+  successfulSamples: number;
+  consecutiveFailures: number;
+  cooldownUntil: number;
+};
+
+// Memori ini berlaku per instance Node/Vercel (best-effort), bukan database bersama.
+// Hedging tetap melindungi request pertama dan cold start ketika belum ada riwayat.
+const providerHealth = new Map<ProviderName, ProviderHealthState>();
+const DEFAULT_PROVIDER_ORDER: ProviderName[] = ['groq', 'gemini', 'openrouter'];
+
+function recordProviderSuccess(provider: ProviderName, latencyMs: number): void {
+  const previous = providerHealth.get(provider) ?? {
+    averageLatencyMs: null, successfulSamples: 0, consecutiveFailures: 0, cooldownUntil: 0,
+  };
+  previous.averageLatencyMs = previous.averageLatencyMs === null
+    ? latencyMs
+    : Math.round(previous.averageLatencyMs * 0.7 + latencyMs * 0.3);
+  previous.successfulSamples += 1;
+  previous.consecutiveFailures = 0;
+  previous.cooldownUntil = 0;
+  providerHealth.set(provider, previous);
+}
+
+function recordProviderFailure(provider: ProviderName, error: unknown): void {
+  const previous = providerHealth.get(provider) ?? {
+    averageLatencyMs: null, successfulSamples: 0, consecutiveFailures: 0, cooldownUntil: 0,
+  };
+  previous.consecutiveFailures += 1;
+  const status = error instanceof ProviderError ? error.status : undefined;
+  const cooldownMs = status === 401 || status === 403 || status === 404
+    ? 5 * 60_000
+    : status === 429
+      ? 30_000
+      : previous.consecutiveFailures >= 2
+        ? 15_000
+        : 0;
+  if (cooldownMs > 0) previous.cooldownUntil = Date.now() + cooldownMs;
+  providerHealth.set(provider, previous);
+}
+
+function rankProviders(enabled: ProviderName[]): ProviderName[] {
+  const now = Date.now();
+  const outsideCooldown = enabled.filter((provider) => (providerHealth.get(provider)?.cooldownUntil ?? 0) <= now);
+  const pool = outsideCooldown.length ? outsideCooldown : enabled;
+  return [...pool].sort((a, b) => {
+    const score = (provider: ProviderName) => {
+      const state = providerHealth.get(provider);
+      const defaultRank = DEFAULT_PROVIDER_ORDER.indexOf(provider);
+      const baseline = 6_000 + defaultRank * 500;
+      const latency = state?.averageLatencyMs ?? baseline;
+      const failurePenalty = Math.min(state?.consecutiveFailures ?? 0, 3) * 3_500;
+      const cooldownPenalty = (state?.cooldownUntil ?? 0) > now
+        ? 50_000 + (state!.cooldownUntil - now)
+        : 0;
+      return latency + failurePenalty + cooldownPenalty;
+    };
+    return score(a) - score(b);
+  });
+}
+
+type HedgedChatResult = { parsed: Record<string, unknown>; provider: ProviderName };
+
+async function generateHedgedChat(
+  system: string,
+  history: ChatTurn[],
+  message: string,
+): Promise<HedgedChatResult> {
+  const enabled: ProviderName[] = [];
+  if (process.env.GROQ_API_KEY) enabled.push('groq');
+  if (process.env.GEMINI_API_KEY) enabled.push('gemini');
+  if (process.env.OPENROUTER_API_KEY) enabled.push('openrouter');
+  if (!enabled.length) {
+    throw new Error('Atur GROQ_API_KEY, GEMINI_API_KEY, atau OPENROUTER_API_KEY untuk mengaktifkan AI.');
+  }
+
+  const candidates = rankProviders(enabled);
+  const deadline = Date.now() + CHAT_BUDGET_MS;
+
+  return new Promise<HedgedChatResult>((resolve, reject) => {
+    let nextIndex = 0;
+    let activeCount = 0;
+    let settled = false;
+    let lastError: unknown;
+    let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const controllers: AbortController[] = [];
+
+    const clearTimers = () => {
+      if (hedgeTimer) clearTimeout(hedgeTimer);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      hedgeTimer = undefined;
+      deadlineTimer = undefined;
+    };
+
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      controllers.forEach((controller) => controller.abort());
+      reject(error);
+    };
+
+    const run = async (provider: ProviderName, signal: AbortSignal): Promise<Record<string, unknown>> => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new ProviderError(TIMEOUT_MESSAGE, 408);
+      const timeoutMs = candidates.length === 1
+        ? remaining
+        : Math.min(CHAT_PROVIDER_TIMEOUT_MS, remaining);
+      let raw: string;
+
+      if (provider === 'groq') {
+        try {
+          raw = await timed('chat groq', () => groqChat(system, history, message, timeoutMs, signal), signal);
+        } catch (error) {
+          const fallbackModel = process.env.GROQ_FALLBACK_MODEL?.trim();
+          const primaryModel = process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
+          if (!(error instanceof ProviderError) || error.status !== 429 || !fallbackModel || fallbackModel === primaryModel) {
+            throw error;
+          }
+          const fallbackRemaining = deadline - Date.now();
+          if (fallbackRemaining <= 0) throw new ProviderError(TIMEOUT_MESSAGE, 408);
+          raw = await timed(
+            'chat groq-cadangan',
+            () => groqChat(system, history, message, Math.min(CHAT_PROVIDER_TIMEOUT_MS, fallbackRemaining), signal, fallbackModel),
+            signal,
+          );
+        }
+      } else if (provider === 'gemini') {
+        raw = await timed('chat gemini', () => geminiChat(system, history, message, timeoutMs, signal), signal);
+      } else {
+        raw = await timed('chat openrouter', () => openRouterChat(system, history, message, timeoutMs, signal), signal);
+      }
+
+      const parsed = parseJsonObject(raw);
+      if (typeof parsed.reply !== 'string' || !Array.isArray(parsed.actions)) {
+        throw new ProviderError('Respons AI tidak sesuai struktur JSON Cashie.', 502);
+      }
+      return parsed;
+    };
+
+    const startNext = () => {
+      if (settled || nextIndex >= candidates.length) return;
+      if (hedgeTimer) clearTimeout(hedgeTimer);
+      hedgeTimer = undefined;
+
+      const provider = candidates[nextIndex++];
+      const controller = new AbortController();
+      controllers.push(controller);
+      activeCount += 1;
+      const attemptStartedAt = Date.now();
+      console.info(`[CAVA AI] hedge start provider=${provider} order=${nextIndex}/${candidates.length}`);
+
+      void run(provider, controller.signal).then((parsed) => {
+        activeCount -= 1;
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        controllers.forEach((other) => {
+          if (other !== controller) other.abort();
+        });
+        const latencyMs = Date.now() - attemptStartedAt;
+        recordProviderSuccess(provider, latencyMs);
+        console.info(`[CAVA AI] hedge winner provider=${provider} elapsed=${latencyMs}ms`);
+        resolve({ parsed, provider });
+      }).catch((error) => {
+        activeCount -= 1;
+        if (settled) return;
+        lastError = error;
+        if (!controller.signal.aborted) recordProviderFailure(provider, error);
+        console.warn(
+          `[CAVA AI] hedge provider=${provider} failed elapsed=${Date.now() - attemptStartedAt}ms reason=${error instanceof Error ? error.message : 'unknown'}`,
+        );
+        if (nextIndex < candidates.length) {
+          startNext();
+        } else if (activeCount === 0) {
+          fail(lastError);
+        }
+      });
+
+      if (nextIndex < candidates.length) {
+        hedgeTimer = setTimeout(startNext, CHAT_HEDGE_DELAY_MS);
+      }
+    };
+
+    deadlineTimer = setTimeout(() => {
+      fail(new ProviderError(TIMEOUT_MESSAGE, 408));
+    }, CHAT_BUDGET_MS);
+
+    startNext();
+  });
+}
+
 export async function generateAssistantReply(
   system: string,
   history: ChatTurn[],
   message: string,
 ): Promise<{ result: AssistantResult; provider: ProviderName }> {
-  let raw = '';
-  let parsedEarly: Record<string, unknown> | null = null;
-  let provider: ProviderName = 'groq';
-  let lastError: unknown;
-  const deadline = Date.now() + CHAT_BUDGET_MS;
-  const hasGroq = Boolean(process.env.GROQ_API_KEY);
-  const hasGemini = Boolean(process.env.GEMINI_API_KEY);
-  const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
-
-  // Urutan provider chat: Groq utama, Gemini cadangan pertama, OpenRouter Free cadangan terakhir.
-  if (hasGroq) {
-    try {
-      const groqMs = hasGemini || hasOpenRouter ? GROQ_CHAT_MS : CHAT_BUDGET_MS;
-      raw = await timed('chat groq', () => groqChat(system, history, message, groqMs));
-      parsedEarly = parseJsonObject(raw);
-      provider = 'groq';
-    } catch (error) {
-      raw = ''; parsedEarly = null;
-      lastError = error;
-      if (!canFallback(error)) throw error;
-    }
-  }
-
-  // Cadangan Groq dengan model lain (batas token per menit dihitung per model). Opsional lewat env.
-  const groqFallbackModel = process.env.GROQ_FALLBACK_MODEL;
-  if (!raw && hasGroq && groqFallbackModel && groqFallbackModel !== (process.env.GROQ_MODEL || 'openai/gpt-oss-20b')
-    && lastError instanceof ProviderError && lastError.status === 429) {
-    try {
-      raw = await timed('chat groq-cadangan', () => groqChat(system, history, message, GROQ_CHAT_MS, groqFallbackModel));
-      parsedEarly = parseJsonObject(raw);
-      provider = 'groq';
-    } catch (error) {
-      raw = ''; parsedEarly = null;
-      lastError = error;
-      if (!canFallback(error)) throw error;
-    }
-  }
-
-  if (!raw && hasGemini) {
-    const remaining = deadline - Date.now();
-    if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    // Bila OpenRouter juga aktif, sisakan hingga 8 detik untuk provider terakhir.
-    // Jika sisa waktu terlalu sempit, langsung gunakan OpenRouter daripada menghabiskan budget pada Gemini.
-    if (!hasOpenRouter || remaining >= MIN_FALLBACK_MS * 3) {
-      const geminiTimeout = hasOpenRouter ? Math.min(GEMINI_CHAT_MS, remaining - 8_000) : remaining;
-      try {
-        raw = await timed('chat gemini', () => geminiChat(system, history, message, geminiTimeout));
-        parsedEarly = parseJsonObject(raw);
-        provider = 'gemini';
-      } catch (error) {
-        raw = ''; parsedEarly = null;
-        lastError = error;
-        if (!canFallback(error)) throw error;
-      }
-    }
-  }
-
-  if (!raw && hasOpenRouter) {
-    const remaining = deadline - Date.now();
-    if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    raw = await timed('chat openrouter', () => openRouterChat(system, history, message, remaining));
-    provider = 'openrouter';
-  }
-
-  if (!raw) {
-    throw lastError instanceof Error
-      ? lastError
-      : new Error('Atur GROQ_API_KEY, GEMINI_API_KEY, atau OPENROUTER_API_KEY untuk mengaktifkan AI.');
-  }
-
-  const parsed = parsedEarly ?? parseJsonObject(raw);
+  const { parsed, provider } = await generateHedgedChat(system, history, message);
+  let reply = typeof parsed.reply === 'string' ? parsed.reply.trim().slice(0, 1800) : '';
+  const rawActions = Array.isArray(parsed.actions) ? parsed.actions : [];
   let reply = typeof parsed.reply === 'string' ? parsed.reply.trim().slice(0, 1800) : '';
   const rawActions = Array.isArray(parsed.actions) ? parsed.actions : [];
   const allowedRoutes = new Map<string, string>([
