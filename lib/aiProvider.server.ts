@@ -115,7 +115,7 @@ function parseJsonObject(raw: string): Record<string, unknown> {
   try {
     parsed = JSON.parse(clean);
   } catch {
-    console.warn('[CAVA AI] JSON tidak valid dari AI:', clean.slice(0, 200));
+    console.warn(`[CAVA AI] JSON tidak valid dari AI (panjang respons: ${clean.length} karakter).`);
     throw new Error('Jawaban AI belum utuh. Coba ucapkan lagi.');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -129,8 +129,8 @@ async function groqChat(system: string, history: ChatTurn[], message: string, ti
   if (!key) throw new ProviderError('GROQ_API_KEY belum diatur.');
 
   const model = modelOverride || process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
-  // Model gpt-oss memakai token "penalaran" yang ikut dihitung dari max_tokens. Tanpa pembatasan,
-  // penalaran bisa menghabiskan seluruh batas sebelum JSON selesai (Groq: json_validate_failed / HTTP 400).
+  // Model gpt-oss memakai token "penalaran" yang ikut dihitung dari completion-token budget.
+  // Beri ruang yang cukup agar JSON Cashie tidak terpotong setelah proses penalaran.
   // Bisa diubah lewat GROQ_REASONING_EFFORT (low | medium | high).
   const reasoning = /gpt-oss/i.test(model) ? { reasoning_effort: process.env.GROQ_REASONING_EFFORT?.trim() || 'low' } : {};
 
@@ -520,8 +520,6 @@ export async function generateAssistantReply(
   message: string,
 ): Promise<{ result: AssistantResult; provider: ProviderName }> {
   const { parsed, provider } = await generateHedgedChat(system, history, message);
-  let reply = typeof parsed.reply === 'string' ? parsed.reply.trim().slice(0, 1800) : '';
-  const rawActions = Array.isArray(parsed.actions) ? parsed.actions : [];
   let reply = typeof parsed.reply === 'string' ? parsed.reply.trim().slice(0, 1800) : '';
   const rawActions = Array.isArray(parsed.actions) ? parsed.actions : [];
   const allowedRoutes = new Map<string, string>([
