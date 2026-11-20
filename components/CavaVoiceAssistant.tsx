@@ -923,7 +923,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         const clarification = typeof body?.reply === 'string' && body.reply.trim()
           ? body.reply.trim().split(/(?<=[.!?])\s+/)[0].slice(0, 220)
           : 'Saya menangkap kamu sedang mengoreksi. Bagian mana dari rincian tadi yang perlu diganti?';
-        historyRef.current = [...historyRef.current, { id: crypto.randomUUID(), role: 'assistant', content: clarification }].slice(-12);
+        const clarificationMessage: Message = { id: crypto.randomUUID(), role: 'assistant', content: clarification };
+        historyRef.current = [...historyRef.current, clarificationMessage].slice(-12);
         showResponse(clarification, 'answer', true);
         if (voiceEnabledRef.current) void speakText(crypto.randomUUID(), clarification);
         return;
@@ -933,12 +934,13 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       if (!isOnlyTransactions && !actionToken) throw new Error('Proposal koreksi belum memiliki izin konfirmasi yang valid. Silakan ulangi koreksinya.');
       setPendingItems(revised, isOnlyTransactions ? null : actionToken);
       const confirmationText = `Saya koreksi. ${actionConfirmation(revised)}`;
-      historyRef.current = [...historyRef.current, {
+      const confirmationMessage: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
         content: confirmationText,
         provider: body?.provider === 'gemini' ? 'gemini' : body?.provider === 'openrouter' ? 'openrouter' : 'groq',
-      }].slice(-12);
+      };
+      historyRef.current = [...historyRef.current, confirmationMessage].slice(-12);
       showResponse(confirmationText, 'confirm', true);
       if (voiceEnabledRef.current) void speakText(crypto.randomUUID(), confirmationText);
     } catch (error) {
