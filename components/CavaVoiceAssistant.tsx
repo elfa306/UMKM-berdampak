@@ -95,8 +95,10 @@ function confirmationChoice(raw: string): 'yes' | 'no' | 'unclear' {
   if (!normalized) return 'unclear';
 
   const words = normalized.split(' ');
-  // Penolakan eksplisit selalu didahulukan, termasuk "ya, tapi jangan dulu".
-  const negativeWords = new Set(['tidak', 'enggak', 'nggak', 'ngga', 'gak', 'ga', 'ndak', 'batal', 'batalkan', 'jangan', 'belum', 'nanti', 'no', 'engga']);
+  if (words.some((word) => ['batal', 'batalkan', 'no'].includes(word))) return 'no';
+  // Frasa koreksi adalah revisi proposal, bukan jawaban ya/tidak.
+  if (/\b(bukan|maksud saya|maksudnya|yang benar|seharusnya|ralat|koreksi|ganti jadi|ubah jadi)\b/.test(normalized)) return 'unclear';
+  const negativeWords = new Set(['tidak', 'enggak', 'nggak', 'ngga', 'gak', 'ga', 'ndak', 'jangan', 'belum', 'nanti', 'engga']);
   if (words.some((word) => negativeWords.has(word))) return 'no';
 
   // Terima frasa alami setelah persetujuan: "ya tambahkan", "iya boleh", "oke langsung catat".
@@ -290,6 +292,10 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const audioCacheRef = useRef<Map<string, CachedSpeech>>(new Map());
   const speechFrameRef = useRef<number | null>(null);
   const speechRequestRef = useRef(0);
+  const activeTurnRef = useRef(0);
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const transcriptionAbortRef = useRef<AbortController | null>(null);
+  const speechAbortRef = useRef<AbortController | null>(null);
   const gestureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceGestureStartedRef = useRef(false);
   const pointerActiveRef = useRef(false);
@@ -424,6 +430,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
 
   const stopCurrentSpeech = useCallback(() => {
     speechRequestRef.current += 1;
+    speechAbortRef.current?.abort();
+    speechAbortRef.current = null;
     if (speechFrameRef.current !== null) cancelAnimationFrame(speechFrameRef.current);
     speechFrameRef.current = null;
     try { audioSourceRef.current?.stop(); } catch { /* audio mungkin sudah selesai */ }
@@ -445,6 +453,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     stopCurrentSpeech();
     activeSpeechTextRef.current = text;
     const requestId = speechRequestRef.current;
+    const controller = new AbortController();
+    speechAbortRef.current = controller;
     setSpeechProgress({ text, visibleCount: 0, activeIndex: -1 });
     setLoadingSpeech(true);
 
@@ -513,12 +523,14 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         credentials: 'same-origin', cache: 'no-store',
         body: JSON.stringify({ text: speechFriendlyText(text) }),
+        signal: controller.signal,
       });
       const body = await result.json().catch(() => null) as {
         error?: string;
         audio_base64?: string;
         alignment?: SpeechAlignment | null;
       } | null;
+      if (speechAbortRef.current === controller) speechAbortRef.current = null;
       if (!result.ok) throw new Error(body?.error || 'Suara CAVA belum dapat dibuat.');
       if (!body?.audio_base64) throw new Error('ElevenLabs tidak mengembalikan audio. Silakan coba putar ulang.');
       if (speechRequestRef.current !== requestId) return;
@@ -538,6 +550,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       await playClip(clip, activeContext);
     } catch (error) {
       if (speechRequestRef.current !== requestId) return;
+      if (speechAbortRef.current === controller) speechAbortRef.current = null;
       setLoadingSpeech(false);
       setSpeaking(false);
       setSpeechProgress(null);
@@ -714,6 +727,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const sendMessage = useCallback(async (rawMessage: string) => {
     const message = rawMessage.trim();
     if (!message || busySendingRef.current) return;
+    const turnId = ++activeTurnRef.current;
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
     busySendingRef.current = true;
     setBusySending(true);
     setPhase('thinking');
@@ -737,13 +753,17 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       }
 
       const token = await getAccessToken();
+      if (turnId !== activeTurnRef.current) return;
       const result = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         credentials: 'same-origin', cache: 'no-store',
         body: JSON.stringify({ message, history: previous }),
+        signal: controller.signal,
       });
+      if (turnId !== activeTurnRef.current) return;
       const body = await result.json();
+      if (turnId !== activeTurnRef.current) return;
       if (!result.ok) throw new Error(body.error || 'CAVA belum dapat menjawab.');
 
       const provider: Message['provider'] = body.provider === 'openrouter' ? 'openrouter' : body.provider === 'gemini' ? 'gemini' : 'groq';
@@ -820,50 +840,184 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         if (voiceEnabledRef.current) void speakText(assistantMessage.id, conciseReply);
       }
     } catch (err) {
+      if (controller.signal.aborted || turnId !== activeTurnRef.current) return;
       const messageText = shortError(err);
       showResponse(messageText, 'error');
       if (voiceEnabledRef.current) void speakText(crypto.randomUUID(), messageText);
     } finally {
-      busySendingRef.current = false;
-      setBusySending(false);
-      setPhase('idle');
+      if (turnId === activeTurnRef.current) {
+        if (chatAbortRef.current === controller) chatAbortRef.current = null;
+        busySendingRef.current = false;
+        setBusySending(false);
+        setPhase('idle');
+      }
     }
   }, [clearResponse, downloadAccountingReport, getAccessToken, onManualRecord, router, setPendingItems, showResponse, speakText]);
 
+  const revisePendingAction = useCallback(async (raw: string) => {
+    const currentProposal = pendingRef.current;
+    if (!currentProposal.length || busySendingRef.current || savingRef.current) return;
+    const turnId = ++activeTurnRef.current;
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
+    busySendingRef.current = true;
+    setBusySending(true);
+    setPhase('thinking');
+    stopCurrentSpeech();
+    clearResponse();
+    const previous = historyRef.current.slice(-4).map(({ role, content }) => ({ role, content }));
+    const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content: raw };
+    historyRef.current = [...historyRef.current, userMessage].slice(-12);
+    try {
+      const token = await getAccessToken();
+      if (turnId !== activeTurnRef.current) return;
+      const result = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: controller.signal,
+        body: JSON.stringify({
+          message: raw,
+          history: previous,
+          mode: 'revise_pending_action',
+          pendingAction: currentProposal,
+          pendingActionToken: pendingTokenRef.current,
+        }),
+      });
+      if (turnId !== activeTurnRef.current) return;
+      const body = await result.json().catch(() => null) as {
+        error?: string;
+        reply?: string;
+        actions?: Array<Record<string, unknown>>;
+        actionToken?: string | null;
+        provider?: string;
+      } | null;
+      if (!result.ok) throw new Error(body?.error || 'Koreksi belum dapat diproses.');
+      if (turnId !== activeTurnRef.current) return;
+      const rawActions = Array.isArray(body?.actions) ? body.actions : [];
+      const currentIsTransactions = currentProposal.every((item) => item.type === 'transaction');
+      let revised: PendingAction[] = [];
+      if (rawActions.length) {
+        if (currentIsTransactions) {
+          if (rawActions.length !== currentProposal.length || rawActions.some((item) => item?.type !== 'transaction')) {
+            throw new Error('Saya belum bisa memastikan rincian transaksi yang perlu dikoreksi. Sebutkan bagian yang ingin diganti.');
+          }
+          revised = rawActions.map((item, index) => ({ ...currentProposal[index], ...item })) as PendingAction[];
+        } else {
+          if (currentProposal.length !== 1 || rawActions.length !== 1 || rawActions[0]?.type !== currentProposal[0].type) {
+            throw new Error('Koreksi ini mengubah jenis tindakan. Sebutkan kembali bagian yang ingin diperbaiki agar saya tidak salah menjalankan.');
+          }
+          const next = rawActions[0] as unknown as PendingAction;
+          const previousAction = currentProposal[0];
+          if (previousAction.type === 'profile_update' && next.type === 'profile_update') {
+            revised = [{ ...next, changes: { ...previousAction.changes, ...next.changes } }];
+          } else if (previousAction.type === 'product_update' && next.type === 'product_update') {
+            revised = [{ ...next, changes: { ...previousAction.changes, ...next.changes } }];
+          } else {
+            revised = [next];
+          }
+        }
+      }
+      if (!revised.length) {
+        const clarification = typeof body?.reply === 'string' && body.reply.trim()
+          ? body.reply.trim().split(/(?<=[.!?])\s+/)[0].slice(0, 220)
+          : 'Saya menangkap kamu sedang mengoreksi. Bagian mana dari rincian tadi yang perlu diganti?';
+        historyRef.current = [...historyRef.current, { id: crypto.randomUUID(), role: 'assistant', content: clarification }].slice(-12);
+        showResponse(clarification, 'answer', true);
+        if (voiceEnabledRef.current) void speakText(crypto.randomUUID(), clarification);
+        return;
+      }
+      const isOnlyTransactions = revised.every((item) => item.type === 'transaction');
+      const actionToken = typeof body?.actionToken === 'string' && body.actionToken.length > 40 ? body.actionToken : null;
+      if (!isOnlyTransactions && !actionToken) throw new Error('Proposal koreksi belum memiliki izin konfirmasi yang valid. Silakan ulangi koreksinya.');
+      setPendingItems(revised, isOnlyTransactions ? null : actionToken);
+      const confirmationText = `Saya koreksi. ${actionConfirmation(revised)}`;
+      historyRef.current = [...historyRef.current, {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: confirmationText,
+        provider: body?.provider === 'gemini' ? 'gemini' : body?.provider === 'openrouter' ? 'openrouter' : 'groq',
+      }].slice(-12);
+      showResponse(confirmationText, 'confirm', true);
+      if (voiceEnabledRef.current) void speakText(crypto.randomUUID(), confirmationText);
+    } catch (error) {
+      if (controller.signal.aborted || turnId !== activeTurnRef.current) return;
+      const message = shortError(error);
+      showResponse(message, 'error', true);
+      if (voiceEnabledRef.current) void speakText(crypto.randomUUID(), message);
+    } finally {
+      if (turnId === activeTurnRef.current) {
+        if (chatAbortRef.current === controller) chatAbortRef.current = null;
+        busySendingRef.current = false;
+        setBusySending(false);
+        setPhase('idle');
+      }
+    }
+  }, [clearResponse, getAccessToken, setPendingItems, showResponse, speakText, stopCurrentSpeech]);
+
   const handleRecognizedText = useCallback(async (text: string) => {
     if (pendingRef.current.length) {
-      try { await handleConfirmation(text); } finally { setPhase('idle'); }
+      const choice = confirmationChoice(text);
+      if (choice === 'yes' || choice === 'no') {
+        try { await handleConfirmation(text); } finally { setPhase('idle'); }
+      } else {
+        await revisePendingAction(text);
+      }
       return;
     }
     await sendMessage(text);
-  }, [handleConfirmation, sendMessage]);
+  }, [handleConfirmation, revisePendingAction, sendMessage]);
 
   const processAudio = useCallback(async (blob: Blob, mime: string) => {
+    const turnId = ++activeTurnRef.current;
+    const controller = new AbortController();
+    transcriptionAbortRef.current = controller;
     try {
       const token = await getAccessToken();
+      if (turnId !== activeTurnRef.current) return;
       const form = new FormData();
       const extension = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
       form.append('audio', blob, `cava-voice.${extension}`);
       const result = await fetch('/api/ai/transcribe', {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
-        credentials: 'same-origin', cache: 'no-store', body: form,
+        credentials: 'same-origin', cache: 'no-store', body: form, signal: controller.signal,
       });
+      if (turnId !== activeTurnRef.current) return;
       const body = await result.json();
+      if (turnId !== activeTurnRef.current) return;
       if (!result.ok) throw new Error(body.error || 'Suara belum berhasil dikenali.');
       const transcript = typeof body.transcript === 'string' ? body.transcript.trim() : '';
       if (!transcript) throw new Error('Ucapan belum terdengar jelas. Silakan coba lagi.');
       setUserSaid(transcript);
       await handleRecognizedText(transcript);
     } catch (err) {
+      if (controller.signal.aborted || turnId !== activeTurnRef.current) return;
       const message = shortError(err);
       showResponse(message, 'error');
       if (voiceEnabledRef.current) void speakText(crypto.randomUUID(), message);
       setPhase('idle');
+    } finally {
+      if (turnId === activeTurnRef.current) {
+        if (transcriptionAbortRef.current === controller) transcriptionAbortRef.current = null;
+        setPhase('idle');
+      }
     }
   }, [getAccessToken, handleRecognizedText, showResponse, speakText]);
 
   const beginRecording = useCallback(async () => {
-    if (phase !== 'idle' || busySending || busySaving) return;
+    const canInterrupt = phase === 'thinking' || phase === 'transcribing' || speaking || loadingSpeech;
+    if ((phase !== 'idle' && !canInterrupt) || busySaving || savingRef.current) return;
+    if (canInterrupt) {
+      activeTurnRef.current += 1;
+      chatAbortRef.current?.abort();
+      chatAbortRef.current = null;
+      transcriptionAbortRef.current?.abort();
+      transcriptionAbortRef.current = null;
+      busySendingRef.current = false;
+      setBusySending(false);
+      setPhase('idle');
+    }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       const message = 'Browser ini belum mendukung perekaman suara. Coba Chrome melalui localhost.';
       showResponse(message, 'error');
@@ -923,7 +1077,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       const message = shortError(err);
       showResponse(message, 'error');
     }
-  }, [busySaving, busySending, clearResponse, getAccessToken, phase, processAudio, showResponse, startMicVisualizer, stopCurrentSpeech, stopTimers, stopTracks, stopMicVisualizer]);
+  }, [busySaving, clearResponse, getAccessToken, loadingSpeech, phase, processAudio, showResponse, speaking, startMicVisualizer, stopCurrentSpeech, stopTimers, stopTracks, stopMicVisualizer]);
 
   const finishRecording = useCallback((cancel = false) => {
     pressedRef.current = false;
@@ -936,6 +1090,41 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       recorder.stop();
     }
   }, [phase, stopTimers]);
+
+  const cancelCurrentTurn = useCallback(() => {
+    // A database write already in progress cannot be rolled back by dismissing the card.
+    if (savingRef.current) return;
+    activeTurnRef.current += 1;
+    cancelledRef.current = true;
+    pressedRef.current = false;
+    if (gestureTimerRef.current) clearTimeout(gestureTimerRef.current);
+    gestureTimerRef.current = null;
+    voiceGestureStartedRef.current = false;
+    pointerActiveRef.current = false;
+    keyboardPressRef.current = false;
+    tapClickPendingRef.current = false;
+    ignoreNextClickRef.current = false;
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = null;
+    transcriptionAbortRef.current?.abort();
+    transcriptionAbortRef.current = null;
+    stopCurrentSpeech();
+    const recorder = recorderRef.current;
+    if (recorder?.state === 'recording') {
+      stopTimers();
+      try { recorder.stop(); } catch { /* recorder mungkin sudah berhenti */ }
+    } else {
+      stopTimers();
+      stopMicVisualizer();
+      stopTracks();
+    }
+    busySendingRef.current = false;
+    setBusySending(false);
+    setPendingItems([]);
+    clearResponse();
+    setUserSaid(null);
+    setPhase('idle');
+  }, [clearResponse, setPendingItems, stopCurrentSpeech, stopMicVisualizer, stopTimers, stopTracks]);
 
   const startPressGesture = useCallback(() => {
     if (gestureTimerRef.current || pointerActiveRef.current && voiceGestureStartedRef.current) return;
@@ -972,7 +1161,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   }, [finishRecording]);
 
   const handlePointerDown = (event: PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0 || pointerActiveRef.current || phase !== 'idle' || isBusy) return;
+    const canBargeIn = phase === 'thinking' || phase === 'transcribing' || speaking || loadingSpeech;
+    if (event.button !== 0 || pointerActiveRef.current || (phase !== 'idle' && !canBargeIn) || (isBusy && !canBargeIn) || busySaving) return;
     unlockAudio();
     pointerActiveRef.current = true;
     // Jangan preventDefault di pointerdown: browser perlu menyelesaikan click
@@ -1009,7 +1199,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if ((event.key === ' ' || event.key === 'Enter') && !event.repeat && !keyboardPressRef.current && phase === 'idle' && !isBusy) {
+    const canBargeIn = phase === 'thinking' || phase === 'transcribing' || speaking || loadingSpeech;
+    if ((event.key === ' ' || event.key === 'Enter') && !event.repeat && !keyboardPressRef.current && (phase === 'idle' || canBargeIn) && (!isBusy || canBargeIn) && !busySaving) {
       unlockAudio();
       event.preventDefault();
       keyboardPressRef.current = true;
@@ -1061,6 +1252,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     ignoreNextClickRef.current = false;
     cancelledRef.current = true;
     pressedRef.current = false;
+    chatAbortRef.current?.abort();
+    transcriptionAbortRef.current?.abort();
+    speechAbortRef.current?.abort();
     stopTimers();
     stopMicVisualizer();
     if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
@@ -1189,7 +1383,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
                   <button type="button" disabled={!response || loadingSpeech || isBusy} onClick={() => { if (response) void speakText(response.id, response.text); }} className="inline-flex items-center gap-1 text-[9px] font-bold text-[#66808A] disabled:opacity-40">
                     {loadingSpeech ? <LoaderCircle size={12} className="animate-spin"/> : <Volume2 size={12}/>} {speaking ? 'Memutar' : 'Ulangi'}
                   </button>
-                  <button type="button" onClick={() => { setResponse(null); if (responseTimerRef.current) clearTimeout(responseTimerRef.current); }} aria-label="Tutup pesan CAVA" className="ml-auto grid h-6 w-6 place-items-center rounded-full text-[#78909A] hover:bg-[#F0F5F2]"><X size={13}/></button>
+                  <button type="button" onClick={cancelCurrentTurn} disabled={busySaving} title={busySaving ? 'Perubahan sedang disimpan dan tidak dapat dibatalkan dari sini.' : 'Batalkan proses Cashie'} aria-label={busySaving ? 'Perubahan sedang disimpan' : 'Batalkan proses atau tutup pesan Cashie'} className="ml-auto grid h-6 w-6 place-items-center rounded-full text-[#78909A] hover:bg-[#F0F5F2] disabled:cursor-not-allowed disabled:opacity-40"><X size={13}/></button>
 
                 </div>
               </div>

@@ -388,6 +388,7 @@ async function generateHedgedChat(
   system: string,
   history: ChatTurn[],
   message: string,
+  parentSignal?: AbortSignal,
 ): Promise<HedgedChatResult> {
   const enabled: ProviderName[] = [];
   if (process.env.GROQ_API_KEY) enabled.push('groq');
@@ -408,12 +409,14 @@ async function generateHedgedChat(
     let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const controllers: AbortController[] = [];
+    let onParentAbort: () => void = () => {};
 
     const clearTimers = () => {
       if (hedgeTimer) clearTimeout(hedgeTimer);
       if (deadlineTimer) clearTimeout(deadlineTimer);
       hedgeTimer = undefined;
       deadlineTimer = undefined;
+      parentSignal?.removeEventListener('abort', onParentAbort);
     };
 
     const fail = (error: unknown) => {
@@ -423,6 +426,13 @@ async function generateHedgedChat(
       controllers.forEach((controller) => controller.abort());
       reject(error);
     };
+
+    onParentAbort = () => fail(parentSignal?.reason ?? new DOMException('Request dibatalkan.', 'AbortError'));
+    if (parentSignal?.aborted) {
+      onParentAbort();
+      return;
+    }
+    parentSignal?.addEventListener('abort', onParentAbort, { once: true });
 
     const run = async (provider: ProviderName, signal: AbortSignal): Promise<Record<string, unknown>> => {
       const remaining = deadline - Date.now();
@@ -518,8 +528,9 @@ export async function generateAssistantReply(
   system: string,
   history: ChatTurn[],
   message: string,
+  signal?: AbortSignal,
 ): Promise<{ result: AssistantResult; provider: ProviderName }> {
-  const { parsed, provider } = await generateHedgedChat(system, history, message);
+  const { parsed, provider } = await generateHedgedChat(system, history, message, signal);
   let reply = typeof parsed.reply === 'string' ? parsed.reply.trim().slice(0, 1800) : '';
   const rawActions = Array.isArray(parsed.actions) ? parsed.actions : [];
   const allowedRoutes = new Map<string, string>([
@@ -745,7 +756,7 @@ export async function generateAssistantReply(
   };
 }
 
-async function groqTranscribe(audio: File, timeoutMs: number): Promise<string> {
+async function groqTranscribe(audio: File, timeoutMs: number, signal?: AbortSignal): Promise<string> {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new ProviderError('GROQ_API_KEY belum diatur.');
   const form = new FormData();
@@ -758,7 +769,7 @@ async function groqTranscribe(audio: File, timeoutMs: number): Promise<string> {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}` },
     body: form,
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: providerRequestSignal(signal, timeoutMs),
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
@@ -771,7 +782,7 @@ async function groqTranscribe(audio: File, timeoutMs: number): Promise<string> {
   return text;
 }
 
-async function geminiTranscribe(audio: File, timeoutMs: number): Promise<string> {
+async function geminiTranscribe(audio: File, timeoutMs: number, signal?: AbortSignal): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new ProviderError('GEMINI_API_KEY belum diatur.');
   const model = process.env.GEMINI_TRANSCRIPTION_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
@@ -786,7 +797,7 @@ async function geminiTranscribe(audio: File, timeoutMs: number): Promise<string>
       ] }],
       generationConfig: { temperature: 0 },
     }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: providerRequestSignal(signal, timeoutMs),
   });
   if (!response.ok) throw new ProviderError(`Transkripsi Gemini gagal (HTTP ${response.status}).`, response.status);
   const data = await response.json();
@@ -795,23 +806,23 @@ async function geminiTranscribe(audio: File, timeoutMs: number): Promise<string>
   return text;
 }
 
-export async function transcribeWithFallback(audio: File): Promise<{ transcript: string; provider: ProviderName }> {
+export async function transcribeWithFallback(audio: File, signal?: AbortSignal): Promise<{ transcript: string; provider: ProviderName }> {
   let groqError: unknown;
   const deadline = Date.now() + TRANSCRIBE_BUDGET_MS;
   const hasGemini = Boolean(process.env.GEMINI_API_KEY);
   if (process.env.GROQ_API_KEY) {
     try {
       const groqMs = hasGemini ? GROQ_TRANSCRIBE_MS : TRANSCRIBE_BUDGET_MS;
-      return { transcript: await timed('transkripsi groq', () => groqTranscribe(audio, groqMs)), provider: 'groq' };
+      return { transcript: await timed('transkripsi groq', () => groqTranscribe(audio, groqMs, signal), signal), provider: 'groq' };
     } catch (error) {
       groqError = error;
-      if (!canFallback(error)) throw error;
+      if (signal?.aborted || !canFallback(error)) throw error;
     }
   }
   if (hasGemini) {
     const remaining = deadline - Date.now();
     if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    return { transcript: await timed('transkripsi gemini', () => geminiTranscribe(audio, remaining)), provider: 'gemini' };
+    return { transcript: await timed('transkripsi gemini', () => geminiTranscribe(audio, remaining, signal), signal), provider: 'gemini' };
   }
   throw groqError instanceof Error ? groqError : new Error('Atur GROQ_API_KEY atau GEMINI_API_KEY untuk mengaktifkan transkripsi.');
 }

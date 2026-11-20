@@ -81,7 +81,7 @@ export async function POST(request: Request) {
         },
         apply_text_normalization: 'on',
       }),
-      signal: AbortSignal.timeout(25_000),
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(25_000)]),
     });
 
     if (!response.ok) {
@@ -153,6 +153,7 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    if (request.signal.aborted) return new Response(null, { status: 499 });
     console.error('CAVA ElevenLabs TTS error:', error);
     return NextResponse.json({ error: 'Suara belum dapat dibuat. Coba putar ulang jawaban.' }, { status: 502 });
   }
