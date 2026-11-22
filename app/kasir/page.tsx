@@ -792,7 +792,7 @@ export default function Kasir() {
                   {products.length > 0 ? `${products.length} produk siap dicatat` : 'Katalog produk masih kosong'}
                 </h3>
                 <p className="m-0 mt-0.5 text-[11px] font-semibold leading-relaxed text-[#307B8E]">
-                  {products.length > 0 ? 'Pilih produk saat mencatat penjualan. Harga beli dan harga jual tersimpan di katalog.' : 'Tambahkan menu beserta harga beli dan harga jual melalui Katalog Produk.'}
+                  {products.length > 0 ? 'Pilih produk untuk mencatat penjualan dan mengelompokkan laporan per produk. Harga pokok dapat diisi bila diperlukan.' : 'Tambahkan menu beserta harga jual melalui Katalog Produk. Harga pokok tidak wajib untuk produk sendiri atau jasa.'}
                 </p>
               </div>
             </div>
