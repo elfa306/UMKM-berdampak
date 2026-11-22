@@ -154,19 +154,17 @@ export function setPlanStatus(userId: string, planId: string, status: PlanStatus
   write(userId, plans);
 }
 
-/** Pembelian bahan yang baru dicatat menandai rencana "beli bahan" sebagai selesai, tanpa perlu ditanya lagi. */
+/** Satu pembelian bahan yang terkonfirmasi hanya menyelesaikan satu rencana beli bahan tertunda. */
 export function completeBuyPlans(userId: string): number {
   if (typeof window === 'undefined') return 0;
   const plans = read(userId);
-  let changed = 0;
-  for (const plan of plans) {
-    if (plan.kind === 'beli_bahan' && plan.status === 'open') {
-      plan.status = 'done';
-      changed += 1;
-    }
-  }
-  if (changed) write(userId, plans);
-  return changed;
+  const next = plans
+    .filter((plan) => plan.kind === 'beli_bahan' && plan.status === 'open')
+    .sort((a, b) => a.dueDay.localeCompare(b.dueDay) || a.createdDay.localeCompare(b.createdDay))[0];
+  if (!next) return 0;
+  next.status = 'done';
+  write(userId, plans);
+  return 1;
 }
 
 /** Jawaban singkat atas pertanyaan tindak lanjut: sudah, batal, atau masih berlaku. */
