@@ -1625,7 +1625,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     for (const name of events) window.addEventListener(name, onGesture, true);
     expiry = window.setTimeout(cleanup, 10 * 60_000);
     pendingGreetingCleanupRef.current = cleanup;
-  }, [canProactiveInterrupt, presentProactive, unlockAudio]);
+  }, [canProactiveInterrupt, presentProactive, speakText, unlockAudio]);
 
   const deliverProactive = useCallback((message: ProactiveMessage) => {
     if (!voiceEnabledRef.current) { presentProactive(message, false); return; }
