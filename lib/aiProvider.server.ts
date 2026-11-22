@@ -11,6 +11,8 @@ export type ProposedTransaction = {
   metode: 'tunai' | 'qris' | null;
   /** Nama produk yang dibuat dari bahan ini; hanya untuk pengeluaran bahan produksi. */
   produk_terkait?: string;
+  /** Nama produk katalog yang dijual; hanya bila disebut jelas dan cocok dengan konteks katalog. */
+  produk_terjual?: string;
 };
 
 export type NavigateAction = { type: 'navigate'; path: string; label: string };
@@ -571,7 +573,8 @@ export async function generateAssistantReply(
       const qty = action.qty === undefined ? 1 : Number(action.qty);
       if ((jenis !== 'penjualan' && jenis !== 'biaya') || !validPrice(jumlah) || !Number.isSafeInteger(qty) || qty < 1 || qty > 100_000 || !keterangan) return [];
       const produk = jenis === 'biaya' && typeof action.produk_terkait === 'string' ? action.produk_terkait.trim().slice(0, 100) : '';
-      return [{ type: 'transaction', jenis, jumlah, qty, keterangan, metode, ...(produk ? { produk_terkait: produk } : {}) }];
+      const produkTerjual = jenis === 'penjualan' && typeof action.produk_terjual === 'string' ? action.produk_terjual.trim().slice(0, 100) : '';
+      return [{ type: 'transaction', jenis, jumlah, qty, keterangan, metode, ...(produk ? { produk_terkait: produk } : {}), ...(produkTerjual ? { produk_terjual: produkTerjual } : {}) }];
     }
     if (action.type === 'transaction_delete') {
       const transactionId = action.transaction_id;
