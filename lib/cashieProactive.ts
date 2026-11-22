@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import { supabase } from './supabase';
 import { rupiah, todayISO } from './accounting';
 import { TRANSACTION_SAVED_EVENT, type QuickSavedDetail } from './quickSession';
-import { klasifikasiBiaya } from './biayaBahan';
+import { isConfirmedMaterialExpense, klasifikasiBiaya } from './biayaBahan';
 import { completeBuyPlans, duePlansFor, markPlanAsked, type DuePlan } from './cashieMemory';
 import { PROFILE_HOURS_EVENT, formatJam, isValidJam, jamKeMenit, menitKeJam } from './jamOperasional';
 
@@ -823,7 +823,7 @@ export function useCashieProactive({ enabled, canInterrupt, deliver }: Options) 
       const detail = (event as CustomEvent<QuickSavedDetail | undefined>).detail;
       if (!detail || detail.guest || !detail.rows?.length) return;
       // Pembelian yang baru dicatat menuntaskan rencana "beli bahan" tanpa perlu ditanya lagi.
-      if (activeUserId && detail.rows.some((row) => row.jenis === 'biaya' && Number(row.jumlah) >= 20_000 && !RECURRING.test(row.keterangan.toLowerCase()))) {
+      if (activeUserId && detail.rows.some(isConfirmedMaterialExpense)) {
         completeBuyPlans(activeUserId);
       }
       window.setTimeout(() => void react(detail), 2200);
