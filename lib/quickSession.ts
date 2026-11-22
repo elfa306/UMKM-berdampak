@@ -10,6 +10,9 @@ export type QuickSavedRow = {
   qty: number;
   created_at: string;
   payment_source?: string;
+  product_id?: string | null;
+  kategori_biaya?: string | null;
+  produk_terkait_id?: string | null;
 };
 
 /** Dikirim lewat event "cava:transaction-saved" supaya beranda ikut memperbarui datanya. */
