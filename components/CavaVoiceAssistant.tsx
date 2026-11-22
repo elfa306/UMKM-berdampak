@@ -273,6 +273,24 @@ function decodeBase64Audio(encoded: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+/** Mengalirkan kata demi kata saat tidak ada suara (suara dimatikan atau diblokir browser). */
+function useWordTypewriter(text: string, active: boolean, wordsPerSecond = 3.6) {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const total = speechDisplayChunks(text).length;
+    setCount(0);
+    const timer = window.setInterval(() => {
+      setCount((current) => {
+        if (current + 1 >= total) window.clearInterval(timer);
+        return Math.min(total, current + 1);
+      });
+    }, Math.round(1000 / wordsPerSecond));
+    return () => window.clearInterval(timer);
+  }, [text, active, wordsPerSecond]);
+  return count;
+}
+
 type CashieMood = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 /** Maskot Cashie dengan gerak berbeda tiap keadaan: mendengarkan, berpikir, berbicara. */
@@ -317,6 +335,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const [busySending, setBusySending] = useState(false);
   const [busySaving, setBusySaving] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  // Teks jawaban ditahan sampai suara mulai (holdId); bila suara tidak ada, teks mengalir sendiri (typeId).
+  const [holdId, setHoldId] = useState<string | null>(null);
+  const [typeId, setTypeId] = useState<string | null>(null);
   const [response, setResponse] = useState<ResponseCard | null>(null);
   const [pending, setPending] = useState<PendingAction[]>([]);
   const [seconds, setSeconds] = useState(0);
@@ -338,6 +359,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const pendingRef = useRef<PendingAction[]>([]);
   const pendingTokenRef = useRef<string | null>(null);
   const voiceEnabledRef = useRef(true);
+  const lastSpokenTextRef = useRef<string | null>(null);
+  const pendingGreetingCleanupRef = useRef<(() => void) | null>(null);
   const busySendingRef = useRef(false);
   const savingRef = useRef(false);
   const pressedRef = useRef(false);
@@ -408,6 +431,21 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     const next: ResponseCard = { id: crypto.randomUUID(), text, kind };
     responseRef.current = next;
     stickyResponseRef.current = sticky;
+    lastSpokenTextRef.current = null;
+    setHoldId(null);
+    setTypeId(null);
+    if (kind !== 'error') {
+      if (voiceEnabledRef.current) {
+        // Teks belum ditampilkan: tunggu suara mulai agar teks mengalir bersama suara.
+        setHoldId(next.id);
+        window.setTimeout(() => {
+          setHoldId((current) => (current === next.id ? null : current));
+          if (responseRef.current?.id === next.id && lastSpokenTextRef.current !== text) setTypeId(next.id);
+        }, 900);
+      } else {
+        setTypeId(next.id);
+      }
+    }
     setResponse(next);
     if (!sticky) scheduleResponseDismiss(next, delay);
   }, [scheduleResponseDismiss]);
@@ -522,6 +560,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     unlockAudio();
     stopCurrentSpeech();
     activeSpeechTextRef.current = text;
+    lastSpokenTextRef.current = text;
     const requestId = speechRequestRef.current;
     const controller = new AbortController();
     speechAbortRef.current = controller;
@@ -529,8 +568,12 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     setLoadingSpeech(true);
 
     const playClip = async (clip: CachedSpeech, context: AudioContext) => {
-      if (context.state === 'suspended') await context.resume();
+      if (context.state === 'suspended') {
+        // Browser dapat memblokir suara sebelum ada sentuhan; jangan menggantung selamanya.
+        await Promise.race([context.resume().catch(() => undefined), new Promise((resolve) => window.setTimeout(resolve, 1200))]);
+      }
       if (speechRequestRef.current !== requestId) return;
+      if (context.state !== 'running') throw new Error('Pemutar suara belum diizinkan browser.');
       const source = context.createBufferSource();
       source.buffer = clip.buffer;
       source.connect(context.destination);
@@ -628,7 +671,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       const message = error instanceof Error ? error.message : 'Suara ElevenLabs belum tersedia.';
       const currentCard = responseRef.current;
       if (currentCard?.text === text) {
-        // Teks jawaban (mis. konfirmasi transaksi) tetap tampil; suara saja yang gagal.
+        // Teks jawaban (mis. konfirmasi transaksi) tetap tampil, mengalir sendiri; suara saja yang gagal.
+        setHoldId(null);
+        setTypeId(currentCard.id);
         console.warn('[CAVA] Suara tidak tersedia:', message);
         if (!stickyResponseRef.current) scheduleResponseDismiss(currentCard, 8_000);
       } else {
@@ -1482,7 +1527,16 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     && !pointerActiveRef.current
   ), []);
 
-  const deliverProactive = useCallback((message: ProactiveMessage) => {
+  const waitForAudioRunning = useCallback(async (timeoutMs: number) => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (audioContextRef.current?.state === 'running') return true;
+      await new Promise((resolve) => window.setTimeout(resolve, 60));
+    }
+    return audioContextRef.current?.state === 'running';
+  }, []);
+
+  const presentProactive = useCallback((message: ProactiveMessage, withVoice: boolean) => {
     const askHours = message.intent?.type === 'ask_hours' ? message.intent : null;
     const suggestion = askHours?.suggestion ?? null;
     // Kartu "benar begitu?" tetap tampil sampai dijawab, supaya tombol Ya tidak hilang sendiri.
@@ -1505,11 +1559,42 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         partial: { buka: suggestion?.buka ?? null, tutup: suggestion?.tutup ?? null },
       };
     }
-    // Browser memblokir suara sebelum ada interaksi; saat itu teks saja yang tampil.
-    if (voiceEnabledRef.current && audioContextRef.current?.state === 'running') {
-      void speakText(id ?? crypto.randomUUID(), message.text);
-    }
+    if (withVoice && voiceEnabledRef.current) void speakText(id ?? crypto.randomUUID(), message.text);
   }, [setHoursProposalState, showResponse, speakText]);
+
+  // Browser baru mengizinkan suara setelah pengguna menyentuh halaman. Bila sapaan pembuka terblokir,
+  // Cashie menunggu sentuhan pertama lalu menyapa dengan suara.
+  const deferGreetingUntilGesture = useCallback((message: ProactiveMessage) => {
+    pendingGreetingCleanupRef.current?.();
+    const events = ['pointerup', 'touchend', 'click', 'keydown'] as const;
+    let expiry = 0;
+    const cleanup = () => {
+      for (const name of events) window.removeEventListener(name, onGesture, true);
+      if (expiry) window.clearTimeout(expiry);
+      pendingGreetingCleanupRef.current = null;
+    };
+    function onGesture() {
+      cleanup();
+      unlockAudio(); // harus dipanggil di dalam sentuhan itu sendiri
+      window.setTimeout(() => {
+        if (!canProactiveInterrupt() || document.querySelector('[aria-modal="true"]')) return;
+        presentProactive(message, true);
+      }, 450);
+    }
+    for (const name of events) window.addEventListener(name, onGesture, true);
+    expiry = window.setTimeout(cleanup, 10 * 60_000);
+    pendingGreetingCleanupRef.current = cleanup;
+  }, [canProactiveInterrupt, presentProactive, unlockAudio]);
+
+  const deliverProactive = useCallback((message: ProactiveMessage) => {
+    if (!voiceEnabledRef.current) { presentProactive(message, false); return; }
+    unlockAudio();
+    void waitForAudioRunning(700).then((running) => {
+      if (running) presentProactive(message, true);
+      else if (message.greeting) deferGreetingUntilGesture(message);
+      else presentProactive(message, false);
+    });
+  }, [deferGreetingUntilGesture, presentProactive, unlockAudio, waitForAudioRunning]);
 
   const runCardAction = useCallback((action: ProactiveAction) => {
     stopCurrentSpeech();
@@ -1527,6 +1612,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   });
 
   useEffect(() => () => {
+    pendingGreetingCleanupRef.current?.();
     speechRequestRef.current += 1;
     if (speechFrameRef.current !== null) cancelAnimationFrame(speechFrameRef.current);
     speechFrameRef.current = null;
@@ -1563,6 +1649,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     : response?.text ?? (pending.length ? 'Menunggu konfirmasi. Ucapkan ya atau tidak.' : '');
   const progressiveChunks = response ? speechDisplayChunks(response.text) : [];
   const isPreparingResponseAudio = Boolean(response && voiceEnabled && loadingSpeech && speechProgress?.text === response.text);
+  const textOnHold = Boolean(response && voiceEnabled && holdId === response.id);
+  const typewriterActive = Boolean(response && typeId === response.id);
+  const typedCount = useWordTypewriter(response?.text ?? '', typewriterActive);
   const isPlayingResponseAudio = Boolean(response && voiceEnabled && speaking && speechProgress?.text === response.text);
 
   return (
@@ -1626,19 +1715,22 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
               {userSaid && (phase === 'thinking' || phase === 'transcribing' || response !== null) && (
                 <p className="mb-1.5 text-[10px] font-semibold leading-snug text-[#66808A]">Kamu: “{userSaid}”</p>
               )}
-              {isPreparingResponseAudio ? (
-                <p className="text-[12px] leading-[1.55] text-[#24475A]">{currentText}</p>
+              {(isPreparingResponseAudio || textOnHold || (isPlayingResponseAudio && (speechProgress?.visibleCount ?? 0) === 0)) ? (
+                <p className="flex h-[22px] items-center gap-1" role="status" aria-label="Cashie sedang menyiapkan suara">
+                  {[0, 1, 2].map((dot) => <span key={dot} className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#307B8E]" style={{ animationDelay: `${dot * 160}ms` }} />)}
+                </p>
               ) : isPlayingResponseAudio ? (
                 <p className="text-[12px] leading-[1.75] text-[#24475A]" aria-label="Teks jawaban Cashie mengikuti suara yang sedang diputar">
-                  {progressiveChunks.map((chunk, index) => {
-                    const visible = index < (speechProgress?.visibleCount ?? 0);
-                    return (
-                      <span
-                        key={`${index}-${chunk.display}`}
-                        className={speechProgress?.activeIndex === index ? 'rounded bg-[#DCEFE5] px-0.5 font-extrabold text-[#103A57] transition-colors' : visible ? '' : 'text-[#9AAEB5]'}
-                      >{index > 0 ? ' ' : ''}{chunk.display}</span>
-                    );
-                  })}
+                  {progressiveChunks.slice(0, speechProgress?.visibleCount ?? 0).map((chunk, index) => (
+                    <span
+                      key={`${index}-${chunk.display}`}
+                      className={speechProgress?.activeIndex === index ? 'rounded bg-[#DCEFE5] px-0.5 font-extrabold text-[#103A57] transition-colors' : ''}
+                    >{index > 0 ? ' ' : ''}{chunk.display}</span>
+                  ))}
+                </p>
+              ) : typewriterActive && typedCount < progressiveChunks.length ? (
+                <p className="text-[12px] leading-[1.75] text-[#24475A]">
+                  {progressiveChunks.slice(0, typedCount).map((chunk, index) => <span key={`${index}-${chunk.display}`}>{index > 0 ? ' ' : ''}{chunk.display}</span>)}
                 </p>
               ) : (
                 <p className="text-[12px] leading-[1.55] text-[#24475A]">{currentText}</p>
