@@ -269,6 +269,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const [micLevels, setMicLevels] = useState<number[]>(EMPTY_WAVEFORM);
   const [userSaid, setUserSaid] = useState<string | null>(null);
 
+  const greetingShownRef = useRef(false);
   const historyRef = useRef<Message[]>([]);
   const pendingRef = useRef<PendingAction[]>([]);
   const pendingTokenRef = useRef<string | null>(null);
@@ -1241,6 +1242,47 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     else if (response) void speakText(response.id, response.text);
   };
 
+  // Cashie menyapa sekali sehari saat pengguna pertama kali membuka area usaha.
+  // Sapaan tidak memotong aktivitas yang sedang berlangsung atau pesan lain.
+  useEffect(() => {
+    if (variant !== 'global' || !controlsVisible || greetingShownRef.current) return;
+    if (typeof window === 'undefined') return;
+
+    const greetingKey = `cava:cashie-greeting:${todayISO()}`;
+    try {
+      if (window.localStorage.getItem(greetingKey) === '1') {
+        greetingShownRef.current = true;
+        return;
+      }
+    } catch {
+      // Penyimpanan lokal yang diblokir tidak boleh mengganggu asisten.
+    }
+
+    const timer = window.setTimeout(() => {
+      if (phase !== 'idle' || responseRef.current || pendingRef.current.length) return;
+
+      greetingShownRef.current = true;
+      try { window.localStorage.setItem(greetingKey, '1'); } catch {
+        // Sapaan tetap dapat tampil walau penyimpanan lokal tidak tersedia.
+      }
+
+      const hour = Number(new Intl.DateTimeFormat('en-GB', {
+        hour: '2-digit',
+        hour12: false,
+        timeZone: 'Asia/Jakarta',
+      }).format(new Date()));
+      const timeGreeting = hour < 11 ? 'selamat pagi'
+        : hour < 15 ? 'selamat siang'
+        : hour < 18 ? 'selamat sore' : 'selamat malam';
+      const greeting = `Halo, ${timeGreeting}! Ada yang ingin kamu siapkan untuk usaha hari ini?`;
+      const greetingId = crypto.randomUUID();
+      showResponse(greeting, 'answer');
+      if (voiceEnabledRef.current) void speakText(greetingId, greeting);
+    }, 1400);
+
+    return () => window.clearTimeout(timer);
+  }, [controlsVisible, phase, response, pending.length, showResponse, speakText, variant]);
+
   useEffect(() => () => {
     speechRequestRef.current += 1;
     if (speechFrameRef.current !== null) cancelAnimationFrame(speechFrameRef.current);
@@ -1319,77 +1361,85 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       <AnimatePresence>
         {hasVisibleCard && (
           <motion.aside
-            initial={reduceMotion ? false : { opacity: 0, y: 14, scale: 0.98 }}
+            initial={reduceMotion ? false : { opacity: 0, y: 58, scale: 0.16 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={reduceMotion ? undefined : { opacity: 0, y: 10, scale: 0.98 }}
-            transition={{ duration: 0.16 }}
-            role="status" aria-live="polite"
-            className="fixed bottom-[calc(88px+env(safe-area-inset-bottom))] left-3 right-3 z-[70] mx-auto w-auto max-w-[460px] rounded-2xl border border-[#103A57]/10 bg-white p-3 shadow-[0_14px_45px_rgba(16,58,87,0.2)] lg:bottom-6 lg:left-[calc(256px+((100vw-256px)/2)-230px)] lg:right-auto lg:mx-0 lg:w-[460px]"
+            exit={reduceMotion ? undefined : { opacity: 0, y: 58, scale: 0.16 }}
+            transition={{ type: 'spring', stiffness: 330, damping: 27, mass: 0.72 }}
+            style={{ transformOrigin: '50% 100%' }}
+            className="fixed bottom-[calc(88px+env(safe-area-inset-bottom))] left-3 right-3 z-[70] mx-auto flex w-auto max-w-[460px] items-end justify-end gap-2 origin-bottom lg:bottom-6 lg:left-auto lg:right-6 lg:mx-0 lg:w-[min(460px,calc(100vw-300px))] lg:max-w-[460px]"
           >
-            <div className="flex items-start gap-2.5">
-              <div className="relative mt-0.5 h-[66px] w-[52px] shrink-0 overflow-hidden">
-                <Image src="/cashie-mascot.webp" alt="Cashie, asisten CAVA" fill sizes="52px" className="object-contain object-bottom" priority={isActive}/>
-                {isBusy && <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-[#307B8E]"/>}
+            <div
+              className="max-h-[min(54vh,430px)] min-w-0 w-[min(276px,calc(100vw-112px))] overflow-y-auto rounded-[20px] rounded-br-md border border-[#103A57]/10 bg-white/95 p-3 shadow-[0_14px_38px_rgba(16,58,87,0.18)] backdrop-blur-sm"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-extrabold tracking-wide text-[#103A57]">Cashie</span>
+                  {isBusy && <span className="h-1.5 w-1.5 rounded-full bg-[#307B8E] animate-pulse" />}
+                </div>
+                {response?.kind === 'confirm' && <span className="rounded-full bg-[#FFF4D9] px-2 py-0.5 text-[9px] font-bold text-[#805600]">Konfirmasi</span>}
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <div className="min-w-0"><p className="text-[10px] font-extrabold tracking-wide text-[#103A57]">Cashie</p><p className="text-[9px] font-semibold text-[#78909A]">Asisten CAVA</p></div>
-                  {response?.kind === 'confirm' && <span className="rounded-full bg-[#FFF4D9] px-2 py-0.5 text-[9px] font-bold text-[#805600]">Konfirmasi</span>}
-                </div>
-                {userSaid && (phase === 'thinking' || phase === 'transcribing' || response !== null) && (
-                  <p className="mb-1 text-[10px] font-semibold leading-snug text-[#66808A]">Kamu: “{userSaid}”</p>
-                )}
-                {isPreparingResponseAudio ? (
-                  <p className="text-[12px] leading-[1.55] text-[#24475A]">{currentText}</p>
-                ) : isPlayingResponseAudio ? (
-                  <p className="text-[12px] leading-[1.75] text-[#24475A]" aria-label="Teks jawaban Cashie mengikuti suara yang sedang diputar">
-                    {progressiveChunks.map((chunk, index) => {
-                      const visible = index < (speechProgress?.visibleCount ?? 0);
-                      return (
-                        <span
-                          key={`${index}-${chunk.display}`}
-                          className={speechProgress?.activeIndex === index ? 'rounded bg-[#DCEFE5] px-0.5 font-extrabold text-[#103A57] transition-colors' : visible ? '' : 'text-[#9AAEB5]'}
-                        >{index > 0 ? ' ' : ''}{chunk.display}</span>
-                      );
-                    })}
-                  </p>
-                ) : (
-                  <p className="text-[12px] leading-[1.55] text-[#24475A]">{currentText}</p>
-                )}
-                {phase === 'recording' && (
-                  <div className="mt-2 rounded-xl bg-[#EEF5F1] px-3 py-2" role="img" aria-label="Gelombang suara bergerak mengikuti volume mikrofon">
-                    <div className="flex h-10 items-center justify-center gap-[3px] overflow-hidden">
-                      {micLevels.map((level, index) => (
-                        <span
-                          key={index}
-                          className="cashie-wave-bar w-[3px] shrink-0 rounded-full bg-[#307B8E]"
-                          style={{ height: `${Math.max(4, 4 + level * 32)}px`, opacity: 0.55 + level * 0.45 }}
-                        />
-                      ))}
-                    </div>
-                    <p className="mt-1 text-center text-[9px] font-bold text-[#66808A]">Gelombang mengikuti suara kamu</p>
+              {userSaid && (phase === 'thinking' || phase === 'transcribing' || response !== null) && (
+                <p className="mb-1.5 text-[10px] font-semibold leading-snug text-[#66808A]">Kamu: “{userSaid}”</p>
+              )}
+              {isPreparingResponseAudio ? (
+                <p className="text-[12px] leading-[1.55] text-[#24475A]">{currentText}</p>
+              ) : isPlayingResponseAudio ? (
+                <p className="text-[12px] leading-[1.75] text-[#24475A]" aria-label="Teks jawaban Cashie mengikuti suara yang sedang diputar">
+                  {progressiveChunks.map((chunk, index) => {
+                    const visible = index < (speechProgress?.visibleCount ?? 0);
+                    return (
+                      <span
+                        key={`${index}-${chunk.display}`}
+                        className={speechProgress?.activeIndex === index ? 'rounded bg-[#DCEFE5] px-0.5 font-extrabold text-[#103A57] transition-colors' : visible ? '' : 'text-[#9AAEB5]'}
+                      >{index > 0 ? ' ' : ''}{chunk.display}</span>
+                    );
+                  })}
+                </p>
+              ) : (
+                <p className="text-[12px] leading-[1.55] text-[#24475A]">{currentText}</p>
+              )}
+              {phase === 'recording' && (
+                <div className="mt-2 rounded-xl bg-[#EEF5F1] px-3 py-2" role="img" aria-label="Gelombang suara bergerak mengikuti volume mikrofon">
+                  <div className="flex h-9 items-center justify-center gap-[3px] overflow-hidden">
+                    {micLevels.map((level, index) => (
+                      <span
+                        key={index}
+                        className="cashie-wave-bar w-[3px] shrink-0 rounded-full bg-[#307B8E]"
+                        style={{ height: `${Math.max(4, 4 + level * 32)}px`, opacity: 0.55 + level * 0.45 }}
+                      />
+                    ))}
                   </div>
-                )}
-                {pending.length > 0 && (
-                  <div className="mt-2.5 flex gap-2">
-                    <button type="button" onClick={confirmPending} disabled={busySaving || !pending.length || (pending.some((item) => ['product_create','product_update','product_delete','production_recipe_create','production_batch_complete','profile_update','accounting_entry','transaction_delete','opening_balance_setup','start_daily_session','daily_modal_set'].includes(item.type)) && !pendingTokenRef.current)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#103A57] px-3 py-2 text-[10px] font-extrabold text-white disabled:opacity-50">
-                      {busySaving ? <LoaderCircle size={12} className="animate-spin"/> : <Check size={12}/>} {pending.every((item) => item.type === 'transaction') ? 'Ya, catat' : 'Ya, lanjutkan'}
-                    </button>
-                    <button type="button" onClick={cancelPending} disabled={busySaving} className="rounded-lg border border-[#D6E3DC] px-3 py-2 text-[10px] font-bold text-[#456273] disabled:opacity-50">Tidak, batalkan</button>
-                  </div>
-                )}
-                <div className="mt-2 flex items-center gap-3">
-                  <button type="button" onClick={toggleVoice} aria-label={voiceEnabled ? 'Matikan suara jawaban' : 'Aktifkan suara jawaban'} className="inline-flex items-center gap-1 text-[9px] font-bold text-[#66808A]">
-                    {voiceEnabled ? <Volume2 size={13}/> : <VolumeX size={13}/>} {voiceEnabled ? 'Suara aktif' : 'Suara mati'}
-                  </button>
-                  <button type="button" disabled={!response || loadingSpeech || isBusy} onClick={() => { if (response) void speakText(response.id, response.text); }} className="inline-flex items-center gap-1 text-[9px] font-bold text-[#66808A] disabled:opacity-40">
-                    {loadingSpeech ? <LoaderCircle size={12} className="animate-spin"/> : <Volume2 size={12}/>} {speaking ? 'Memutar' : 'Ulangi'}
-                  </button>
-                  <button type="button" onClick={cancelCurrentTurn} disabled={busySaving} title={busySaving ? 'Perubahan sedang disimpan dan tidak dapat dibatalkan dari sini.' : 'Batalkan proses Cashie'} aria-label={busySaving ? 'Perubahan sedang disimpan' : 'Batalkan proses atau tutup pesan Cashie'} className="ml-auto grid h-6 w-6 place-items-center rounded-full text-[#78909A] hover:bg-[#F0F5F2] disabled:cursor-not-allowed disabled:opacity-40"><X size={13}/></button>
-
+                  <p className="mt-1 text-center text-[9px] font-bold text-[#66808A]">Dengarkan saya</p>
                 </div>
+              )}
+              {pending.length > 0 && (
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  <button type="button" onClick={confirmPending} disabled={busySaving || !pending.length || (pending.some((item) => ['product_create','product_update','product_delete','production_recipe_create','production_batch_complete','profile_update','accounting_entry','transaction_delete','opening_balance_setup','start_daily_session','daily_modal_set'].includes(item.type)) && !pendingTokenRef.current)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#103A57] px-3 py-2 text-[10px] font-extrabold text-white disabled:opacity-50">
+                    {busySaving ? <LoaderCircle size={12} className="animate-spin"/> : <Check size={12}/>} {pending.every((item) => item.type === 'transaction') ? 'Ya, catat' : 'Ya, lanjutkan'}
+                  </button>
+                  <button type="button" onClick={cancelPending} disabled={busySaving} className="rounded-lg border border-[#D6E3DC] px-3 py-2 text-[10px] font-bold text-[#456273] disabled:opacity-50">Tidak, batalkan</button>
+                </div>
+              )}
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-[#EAF0EC] pt-2">
+                <button type="button" onClick={toggleVoice} aria-label={voiceEnabled ? 'Matikan suara jawaban' : 'Aktifkan suara jawaban'} className="inline-flex items-center gap-1 text-[9px] font-bold text-[#66808A]">
+                  {voiceEnabled ? <Volume2 size={13}/> : <VolumeX size={13}/>} {voiceEnabled ? 'Suara aktif' : 'Suara mati'}
+                </button>
+                <button type="button" disabled={!response || loadingSpeech || isBusy} onClick={() => { if (response) void speakText(response.id, response.text); }} className="inline-flex items-center gap-1 text-[9px] font-bold text-[#66808A] disabled:opacity-40">
+                  {loadingSpeech ? <LoaderCircle size={12} className="animate-spin"/> : <Volume2 size={12}/>} {speaking ? 'Memutar' : 'Ulangi'}
+                </button>
+                <button type="button" onClick={cancelCurrentTurn} disabled={busySaving} title={busySaving ? 'Perubahan sedang disimpan dan tidak dapat dibatalkan dari sini.' : 'Batalkan proses Cashie'} aria-label={busySaving ? 'Perubahan sedang disimpan' : 'Tutup pesan Cashie'} className="ml-auto grid h-6 w-6 place-items-center rounded-full text-[#78909A] hover:bg-[#F0F5F2] disabled:cursor-not-allowed disabled:opacity-40"><X size={13}/></button>
               </div>
             </div>
+            <motion.div
+              className="relative mb-0 h-[96px] w-[72px] shrink-0 drop-shadow-[0_8px_12px_rgba(16,58,87,0.16)]"
+              animate={isBusy || speaking ? { y: [0, -3, 0] } : { y: 0 }}
+              transition={{ duration: 1.8, repeat: isBusy || speaking ? Infinity : 0, ease: 'easeInOut' }}
+              aria-hidden="true"
+            >
+              <Image src="/cashie-mascot.webp" alt="" fill sizes="72px" className="object-contain object-bottom" priority={isActive}/>
+            </motion.div>
           </motion.aside>
         )}
       </AnimatePresence>
