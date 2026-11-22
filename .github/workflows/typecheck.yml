@@ -21,3 +21,13 @@ jobs:
         run: npm ci
       - name: Check TypeScript
         run: npx tsc --noEmit
+      - name: Cashie logic tests
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy-anon-key
+        run: npx tsx scripts/test-cashie-logic.mts
+      - name: Cashie proactive tests
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy-anon-key
+        run: npx tsx scripts/test-cashie-proactive.mts
