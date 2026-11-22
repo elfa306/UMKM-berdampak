@@ -7,7 +7,8 @@ import { AnimatePresence, motion, useAnimationControls, useReducedMotion, type V
 import { Check, LoaderCircle, Volume2, VolumeX, X } from 'lucide-react';
 import { CavaVMark } from './CavaLogo';
 import { supabase } from '@/lib/supabase';
-import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
+import { announceTransactionSaved, ensureTodaySession, TRANSACTION_SAVED_EVENT, type QuickSavedRow } from '@/lib/quickSession';
+import type { Nudge, NudgeKind } from '@/lib/cashieNudges';
 import { todayISO, rupiah } from '@/lib/accounting';
 import { canSpeakProactively, hasSpokenProactiveToday, markProactiveDismissed, markProactiveEngaged, markProactiveSpoken } from '@/lib/cashieInterrupt';
 
@@ -274,6 +275,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const popOffsetRef = useRef({ x: 0, y: 56 });
   const hadCardRef = useRef(false);
   const proactiveIdRef = useRef<string | null>(null);
+  const phaseRef = useRef<Phase>('idle');
+  const activityRef = useRef(false);
+  const greetingBusyRef = useRef(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [busySending, setBusySending] = useState(false);
   const [busySaving, setBusySaving] = useState(false);
@@ -1268,9 +1272,53 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     else if (response) void speakText(response.id, response.text);
   };
 
-  // Cashie menyapa sekali sehari saat pengguna pertama kali membuka area usaha.
-  // Semua pesan yang datang atas inisiatif Cashie lewat aturan di lib/cashieInterrupt.ts
-  // (jeda antar pesan, batas harian, tidak menyela dialog, diam jika sering ditutup).
+  // ── Pesan atas inisiatif Cashie ────────────────────────────────────────────
+  // Cashie hanya berbicara lebih dulu bila (1) tidak ada aktivitas lain, (2) aturan di
+  // lib/cashieInterrupt.ts mengizinkan, dan (3) ada alasan dari data usaha (lib/cashieNudges.ts).
+  useEffect(() => {
+    phaseRef.current = phase;
+    activityRef.current = speaking || loadingSpeech || busySaving || busySending;
+  }, [phase, speaking, loadingSpeech, busySaving, busySending]);
+
+  const proactiveIdle = useCallback(
+    () => phaseRef.current === 'idle' && !activityRef.current && !responseRef.current && pendingRef.current.length === 0,
+    [],
+  );
+
+  const fetchNudges = useCallback(async (timeoutMs = 8000): Promise<Nudge[]> => {
+    const token = await getAccessToken();
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const result = await fetch('/api/ai/proaktif', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+      });
+      if (!result.ok) return [];
+      const body = await result.json() as { nudges?: unknown };
+      if (!Array.isArray(body.nudges)) return [];
+      const kinds: NudgeKind[] = ['start', 'pengeluaran', 'produksi', 'kondisi', 'tutup'];
+      return body.nudges.filter((item): item is Nudge => {
+        const n = item as Partial<Nudge> | null;
+        return !!n && typeof n.key === 'string' && typeof n.text === 'string' && n.text.length > 0 && n.text.length <= 320
+          && typeof n.cooldownDays === 'number' && kinds.includes(n.kind as NudgeKind);
+      });
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }, [getAccessToken]);
+
+  /** Tampilkan pesan Cashie dan simpan di riwayat supaya jawaban pemilik usaha punya konteks. */
+  const announceProactive = useCallback((text: string) => {
+    const id = showResponse(text, 'answer');
+    proactiveIdRef.current = id;
+    historyRef.current = [...historyRef.current, { id, role: 'assistant' as const, content: text }].slice(-12);
+    if (voiceEnabledRef.current) void speakText(id, text);
+  }, [showResponse, speakText]);
+
+  // Sapaan pembuka sekali sehari. Bila data usaha memberi alasan (mis. penjualan kemarin),
+  // sapaan memuat pertanyaan yang kontekstual; bila tidak, sapaan umum.
   useEffect(() => {
     if (variant !== 'global' || !controlsVisible || greetingShownRef.current) return;
     if (typeof window === 'undefined') return;
@@ -1281,28 +1329,77 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     }
 
     const timer = window.setTimeout(() => {
-      if (phase !== 'idle' || responseRef.current || pendingRef.current.length) return;
-      if (!canSpeakProactively('greeting')) return;
+      if (greetingBusyRef.current || !proactiveIdle() || !canSpeakProactively('greeting')) return;
+      greetingBusyRef.current = true;
+      void (async () => {
+        let opener: Nudge | undefined;
+        try {
+          opener = (await fetchNudges(2500)).find((nudge) => nudge.kind === 'start');
+        } catch {
+          // Mode tamu atau jaringan lambat: sapaan umum tetap tampil.
+        }
+        greetingBusyRef.current = false;
+        // Pemilik usaha mungkin mulai melakukan sesuatu selama data dimuat; jangan menyela.
+        if (greetingShownRef.current || !proactiveIdle() || !canSpeakProactively('greeting')) return;
 
-      greetingShownRef.current = true;
-      markProactiveSpoken('greeting');
+        greetingShownRef.current = true;
+        markProactiveSpoken(opener ? ['greeting', opener.key] : 'greeting');
 
-      const hour = Number(new Intl.DateTimeFormat('en-GB', {
-        hour: '2-digit',
-        hour12: false,
-        timeZone: 'Asia/Jakarta',
-      }).format(new Date()));
-      const timeGreeting = hour < 11 ? 'selamat pagi'
-        : hour < 15 ? 'selamat siang'
-        : hour < 18 ? 'selamat sore' : 'selamat malam';
-      const greeting = `Halo, ${timeGreeting}! Ada yang ingin kamu siapkan untuk usaha hari ini?`;
-      const greetingId = showResponse(greeting, 'answer');
-      proactiveIdRef.current = greetingId;
-      if (voiceEnabledRef.current) void speakText(greetingId, greeting);
+        const hour = Number(new Intl.DateTimeFormat('en-GB', {
+          hour: '2-digit',
+          hour12: false,
+          timeZone: 'Asia/Jakarta',
+        }).format(new Date()));
+        const timeGreeting = hour < 11 ? 'selamat pagi'
+          : hour < 15 ? 'selamat siang'
+          : hour < 18 ? 'selamat sore' : 'selamat malam';
+        announceProactive(`Halo, ${timeGreeting}! ${opener?.text ?? 'Ada yang ingin kamu siapkan untuk usaha hari ini?'}`);
+      })();
     }, 1400);
 
     return () => window.clearTimeout(timer);
-  }, [controlsVisible, phase, response, pending.length, showResponse, speakText, variant]);
+  }, [announceProactive, controlsVisible, fetchNudges, phase, response, pending.length, proactiveIdle, variant]);
+
+  // Pesan susulan berdasarkan kondisi usaha: cek berkala, dan sesaat setelah transaksi tersimpan.
+  useEffect(() => {
+    if (variant !== 'global' || !controlsVisible) return;
+    let cancelled = false;
+    let running = false;
+
+    const jalankan = async () => {
+      // Pemeriksaan murah dulu supaya tidak memanggil server saat Cashie memang harus diam.
+      if (cancelled || running || !proactiveIdle() || !canSpeakProactively('__cek__', { bypassGap: true, cooldownDays: 0 })) return;
+      running = true;
+      try {
+        const daftar = (await fetchNudges()).filter((nudge) => nudge.kind !== 'start');
+        if (cancelled || !proactiveIdle()) return;
+        const pilihan = daftar.find((nudge) => canSpeakProactively(nudge.key, { cooldownDays: nudge.cooldownDays, bypassGap: nudge.bypassGap }));
+        if (!pilihan) return;
+        markProactiveSpoken(pilihan.key);
+        announceProactive(pilihan.text);
+      } catch {
+        // Pesan proaktif hanya pelengkap; kegagalan tidak perlu ditampilkan.
+      } finally {
+        running = false;
+      }
+    };
+
+    let savedTimer: number | undefined;
+    const onSaved = () => {
+      window.clearTimeout(savedTimer);
+      savedTimer = window.setTimeout(() => { void jalankan(); }, 3000);
+    };
+    const first = window.setTimeout(() => { void jalankan(); }, 25_000);
+    const interval = window.setInterval(() => { void jalankan(); }, 5 * 60_000);
+    window.addEventListener(TRANSACTION_SAVED_EVENT, onSaved);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(first);
+      window.clearTimeout(savedTimer);
+      window.clearInterval(interval);
+      window.removeEventListener(TRANSACTION_SAVED_EVENT, onSaved);
+    };
+  }, [announceProactive, controlsVisible, fetchNudges, proactiveIdle, variant]);
 
   useEffect(() => () => {
     speechRequestRef.current += 1;

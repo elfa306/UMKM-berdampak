@@ -14,15 +14,38 @@ type ProactiveState = {
   count: number;
   lastAt: number;
   dismissStreak: number;
-  spoken: Record<string, number>; // kunci topik → waktu terakhir disampaikan
+  spoken: Record<string, number>; // kunci topik → waktu terakhir disampaikan (bertahan lintas hari)
 };
+
+const SPOKEN_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const QUIET_HOURS = { from: 22, to: 5 }; // 22.00–04.59 WIB Cashie tidak memulai percakapan
 
 function jakartaDay(now: number): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date(now));
 }
 
-function emptyState(day: string): ProactiveState {
-  return { day, count: 0, lastAt: 0, dismissStreak: 0, spoken: {} };
+function emptyState(day: string, spoken: Record<string, number> = {}): ProactiveState {
+  return { day, count: 0, lastAt: 0, dismissStreak: 0, spoken };
+}
+
+function pruneSpoken(value: unknown, now: number): Record<string, number> {
+  if (!value || typeof value !== 'object') return {};
+  const result: Record<string, number> = {};
+  for (const [key, at] of Object.entries(value as Record<string, unknown>)) {
+    const time = Number(at);
+    if (Number.isFinite(time) && now - time < SPOKEN_RETENTION_MS) result[key] = time;
+  }
+  return result;
+}
+
+export function jakartaHour(now = Date.now()): number {
+  return Number(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).format(new Date(now))) % 24;
+}
+
+export function isQuietHours(now = Date.now()): boolean {
+  const hour = jakartaHour(now);
+  return hour >= QUIET_HOURS.from || hour < QUIET_HOURS.to;
 }
 
 function readState(now: number): ProactiveState | null {
@@ -31,13 +54,14 @@ function readState(now: number): ProactiveState | null {
     const raw = window.localStorage.getItem(STORE_KEY);
     if (!raw) return emptyState(day);
     const parsed = JSON.parse(raw) as Partial<ProactiveState>;
-    if (parsed.day !== day) return emptyState(day); // hari baru → mulai bersih
+    const spoken = pruneSpoken(parsed.spoken, now);
+    if (parsed.day !== day) return emptyState(day, spoken); // hari baru → hitungan harian bersih, riwayat topik tetap
     return {
       day,
       count: Number(parsed.count) || 0,
       lastAt: Number(parsed.lastAt) || 0,
       dismissStreak: Number(parsed.dismissStreak) || 0,
-      spoken: parsed.spoken && typeof parsed.spoken === 'object' ? parsed.spoken : {},
+      spoken,
     };
   } catch {
     return null;
@@ -58,19 +82,27 @@ export function isUserBusyElsewhere(): boolean {
 }
 
 export type ProactiveOptions = {
-  /** Topik yang hanya boleh disampaikan sekali per hari (mis. "greeting"). */
-  oncePerDay?: boolean;
+  /** Topik yang sama tidak diulang sebelum sekian hari berlalu (bawaan 1 = sekali per hari). */
+  cooldownDays?: number;
   /** Pesan penting boleh melewati jeda antar pesan, tapi tidak melewati batas harian. */
   bypassGap?: boolean;
 };
 
+function spokenWithinCooldown(state: ProactiveState, key: string, cooldownDays: number, now: number): boolean {
+  const last = state.spoken[key];
+  if (!last) return false;
+  const lastDay = Date.parse(`${jakartaDay(last)}T00:00:00Z`);
+  const today = Date.parse(`${jakartaDay(now)}T00:00:00Z`);
+  return Math.round((today - lastDay) / DAY_MS) < cooldownDays;
+}
+
 export function canSpeakProactively(key: string, options: ProactiveOptions = {}, now = Date.now()): boolean {
-  if (typeof window === 'undefined' || isUserBusyElsewhere()) return false;
+  if (typeof window === 'undefined' || isUserBusyElsewhere() || isQuietHours(now)) return false;
   const state = readState(now);
   if (!state) return false;
   if (state.dismissStreak >= PROACTIVE_MAX_DISMISS_STREAK) return false;
   if (state.count >= PROACTIVE_MAX_PER_DAY) return false;
-  if (options.oncePerDay !== false && state.spoken[key]) return false;
+  if (spokenWithinCooldown(state, key, options.cooldownDays ?? 1, now)) return false;
   if (!options.bypassGap && state.lastAt && now - state.lastAt < PROACTIVE_MIN_GAP_MS) return false;
   return true;
 }
@@ -79,14 +111,14 @@ export function canSpeakProactively(key: string, options: ProactiveOptions = {},
 export function hasSpokenProactiveToday(key: string, now = Date.now()): boolean {
   if (typeof window === 'undefined') return false;
   const state = readState(now);
-  return Boolean(state?.spoken[key]);
+  return state ? spokenWithinCooldown(state, key, 1, now) : false;
 }
 
-export function markProactiveSpoken(key: string, now = Date.now()) {
+export function markProactiveSpoken(key: string | string[], now = Date.now()) {
   const state = readState(now) ?? emptyState(jakartaDay(now));
-  state.count += 1;
+  state.count += 1; // satu pesan dihitung satu kali, walau menandai beberapa topik
   state.lastAt = now;
-  state.spoken[key] = now;
+  for (const k of Array.isArray(key) ? key : [key]) state.spoken[k] = now;
   writeState(state);
 }
 
