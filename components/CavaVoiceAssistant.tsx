@@ -9,6 +9,7 @@ import { CavaVMark } from './CavaLogo';
 import { supabase } from '@/lib/supabase';
 import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
 import { todayISO, rupiah } from '@/lib/accounting';
+import { recordProactiveDismissed, useCashieProactive } from '@/lib/cashieProactive';
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'thinking';
 type Message = { id: string; role: 'user' | 'assistant'; content: string; provider?: 'groq' | 'gemini' | 'openrouter' };
@@ -269,7 +270,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const [micLevels, setMicLevels] = useState<number[]>(EMPTY_WAVEFORM);
   const [userSaid, setUserSaid] = useState<string | null>(null);
 
-  const greetingShownRef = useRef(false);
+  const phaseStateRef = useRef<Phase>('idle');
+  const proactiveCardIdRef = useRef<string | null>(null);
+  const lastShownAtRef = useRef(0);
   const historyRef = useRef<Message[]>([]);
   const pendingRef = useRef<PendingAction[]>([]);
   const pendingTokenRef = useRef<string | null>(null);
@@ -339,6 +342,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     const next: ResponseCard = { id: crypto.randomUUID(), text, kind };
     responseRef.current = next;
     stickyResponseRef.current = sticky;
+    lastShownAtRef.current = Date.now();
     setResponse(next);
     if (!sticky) scheduleResponseDismiss(next, 11_000);
   }, [scheduleResponseDismiss]);
@@ -1097,6 +1101,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const cancelCurrentTurn = useCallback(() => {
     // A database write already in progress cannot be rolled back by dismissing the card.
     if (savingRef.current) return;
+    // Menutup kartu proaktif dihitung sebagai sinyal "jangan ganggu" agar Cashie tidak terlalu sering bicara.
+    if (proactiveCardIdRef.current && responseRef.current?.id === proactiveCardIdRef.current) recordProactiveDismissed();
+    proactiveCardIdRef.current = null;
     activeTurnRef.current += 1;
     cancelledRef.current = true;
     pressedRef.current = false;
@@ -1242,46 +1249,26 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     else if (response) void speakText(response.id, response.text);
   };
 
-  // Cashie menyapa sekali sehari saat pengguna pertama kali membuka area usaha.
-  // Sapaan tidak memotong aktivitas yang sedang berlangsung atau pesan lain.
-  useEffect(() => {
-    if (variant !== 'global' || !controlsVisible || greetingShownRef.current) return;
-    if (typeof window === 'undefined') return;
-
-    const greetingKey = `cava:cashie-greeting:${todayISO()}`;
-    try {
-      if (window.localStorage.getItem(greetingKey) === '1') {
-        greetingShownRef.current = true;
-        return;
-      }
-    } catch {
-      // Penyimpanan lokal yang diblokir tidak boleh mengganggu asisten.
-    }
-
-    const timer = window.setTimeout(() => {
-      if (phase !== 'idle' || responseRef.current || pendingRef.current.length) return;
-
-      greetingShownRef.current = true;
-      try { window.localStorage.setItem(greetingKey, '1'); } catch {
-        // Sapaan tetap dapat tampil walau penyimpanan lokal tidak tersedia.
-      }
-
-      const hour = Number(new Intl.DateTimeFormat('en-GB', {
-        hour: '2-digit',
-        hour12: false,
-        timeZone: 'Asia/Jakarta',
-      }).format(new Date()));
-      const timeGreeting = hour < 11 ? 'selamat pagi'
-        : hour < 15 ? 'selamat siang'
-        : hour < 18 ? 'selamat sore' : 'selamat malam';
-      const greeting = `Halo, ${timeGreeting}! Ada yang ingin kamu siapkan untuk usaha hari ini?`;
-      const greetingId = crypto.randomUUID();
-      showResponse(greeting, 'answer');
-      if (voiceEnabledRef.current) void speakText(greetingId, greeting);
-    }, 1400);
-
-    return () => window.clearTimeout(timer);
-  }, [controlsVisible, phase, response, pending.length, showResponse, speakText, variant]);
+  // Cashie proaktif: pesan kontekstual berbasis data transaksi (pagi, wawasan usaha, menjelang tutup).
+  // Pembatasan frekuensi dan riwayat pesan ada di lib/cashieProactive.ts; di sini hanya syarat
+  // "boleh menyela" agar Cashie tidak memotong perekaman, jawaban, konfirmasi, atau penyimpanan.
+  phaseStateRef.current = phase;
+  useCashieProactive({
+    enabled: variant === 'global' && controlsVisible,
+    canInterrupt: () => phaseStateRef.current === 'idle'
+      && !responseRef.current
+      && pendingRef.current.length === 0
+      && !savingRef.current
+      && !busySendingRef.current
+      && !pressedRef.current
+      && !activeSpeechTextRef.current
+      && Date.now() - lastShownAtRef.current > 45_000,
+    deliver: (text) => {
+      showResponse(text, 'answer');
+      proactiveCardIdRef.current = responseRef.current?.id ?? null;
+      if (voiceEnabledRef.current) void speakText(crypto.randomUUID(), text);
+    },
+  });
 
   useEffect(() => () => {
     speechRequestRef.current += 1;
