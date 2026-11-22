@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { ringkasBiayaPerProduk, type BiayaPerProduk } from '@/lib/biayaBahan';
 
 type LedgerEntry = { id: string; entry_no: string; source_type: string; entry_date: string; description: string; created_at: string };
 type LedgerLine = { entry_id: string; account_code: string; account_name: string; account_type: string; debit: number | string; credit: number | string };
@@ -112,8 +113,32 @@ async function loadSnapshot(admin: SupabaseClient, entryTable: string, lineTable
   return calculate(entries, lines, month);
 }
 
-export function getOwnerLedgerSnapshot(admin: SupabaseClient, userId: string, month?: string) {
-  return loadSnapshot(admin, 'journal_entries', 'journal_lines', 'user_id', userId, month);
+async function loadProductCosts(admin: SupabaseClient, userId: string, month?: string): Promise<BiayaPerProduk[]> {
+  const range = monthRange(month);
+  const start = new Date(`${range.start}T00:00:00+07:00`).toISOString();
+  const end = new Date(`${range.endExclusive}T00:00:00+07:00`).toISOString();
+  const rows: Record<string, unknown>[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await admin.from('transactions')
+      .select('jenis,jumlah,qty,product_id,kategori_biaya,produk_terkait_id')
+      .eq('user_id', userId).gte('created_at', start).lt('created_at', end)
+      .range(from, from + 999);
+    // Sebelum migration v22 dijalankan kolom relasi belum ada: laporan utama tetap tampil tanpa rincian produk.
+    if (error) return [];
+    rows.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  const { data: products } = await admin.from('products').select('id,nama').eq('user_id', userId);
+  const names = new Map((products ?? []).map((p: { id: string; nama: string }) => [p.id, p.nama]));
+  return ringkasBiayaPerProduk(rows as Parameters<typeof ringkasBiayaPerProduk>[0], names);
+}
+
+export async function getOwnerLedgerSnapshot(admin: SupabaseClient, userId: string, month?: string) {
+  const [snapshot, productCosts] = await Promise.all([
+    loadSnapshot(admin, 'journal_entries', 'journal_lines', 'user_id', userId, month),
+    loadProductCosts(admin, userId, month),
+  ]);
+  return { ...snapshot, productCosts };
 }
 export function getDemoLedgerSnapshot(admin: SupabaseClient, sessionId: string, month?: string) {
   return loadSnapshot(admin, 'demo_journal_entries', 'demo_journal_lines', 'session_id', sessionId, month);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { parseOperatingHours } from '../lib/jamOperasional';
-import { klasifikasiBiaya, jawabanKategori, kategoriDariPilihan } from '../lib/biayaBahan';
+import { klasifikasiBiaya, jawabanKategori, kategoriDariPilihan, ringkasBiayaPerProduk } from '../lib/biayaBahan';
 import { extractPlan, planReply } from '../lib/cashieMemory';
 import { matchLocalExport } from '../lib/cashieIntents';
 
@@ -53,6 +53,25 @@ t('"besok saya mau beli bahan" = rencana kuat', () => { const r = extractPlan('b
 t('"saya mau beli bahan" = rencana lemah (tetap ke AI)', () => assert.equal(extractPlan('saya mau beli bahan', today)?.strong, false));
 t('"mau catat pembelian bahan" bukan rencana', () => assert.equal(extractPlan('saya mau catat pembelian bahan', today), null));
 t('"tolong bukakan form beli bahan" bukan rencana', () => assert.equal(extractPlan('besok tolong bukakan form beli bahan', today), null));
+
+// Biaya bahan per produk (migration v22)
+const contohTransaksi = [
+  { jenis: 'penjualan', jumlah: 50000, qty: 2, product_id: 'kue' },
+  { jenis: 'penjualan', jumlah: '30000', product_id: 'kue' },
+  { jenis: 'biaya', jumlah: 250000, kategori_biaya: 'bahan_produksi', produk_terkait_id: 'kue' },
+  { jenis: 'biaya', jumlah: 40000, kategori_biaya: 'bahan_produksi' },
+  { jenis: 'biaya', jumlah: 99000, kategori_biaya: 'operasional' },
+];
+t('ringkasan per produk: penjualan, qty, biaya, selisih', () => {
+  const kue = ringkasBiayaPerProduk(contohTransaksi, new Map([['kue', 'Kue']])).find((h) => h.produkId === 'kue');
+  assert.deepEqual(kue && [kue.penjualan, kue.qtyTerjual, kue.biayaBahanTercatat, kue.selisih], [80000, 3, 250000, -170000]);
+});
+t('biaya bahan tanpa produk masuk baris terpisah di akhir, operasional tidak ikut', () => {
+  const hasil = ringkasBiayaPerProduk(contohTransaksi, new Map([['kue', 'Kue']]));
+  assert.equal(hasil.length, 2);
+  assert.equal(hasil[1].produkId, null);
+  assert.equal(hasil[1].biayaBahanTercatat, 40000);
+});
 
 console.log(`\nLolos ${pass}, gagal ${fail}`);
 process.exit(fail ? 1 : 0);

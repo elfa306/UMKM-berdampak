@@ -52,3 +52,44 @@ export function jawabanKategori(raw: string): { kategori: KategoriBiaya; produk:
   const bersih = dipangkas && !/^(bahan|produksi|usaha|jualan|dagangan)$/.test(dipangkas) ? dipangkas : null;
   return { kategori: 'bahan_produksi', produk: bersih };
 }
+
+export type BiayaPerProduk = {
+  produkId: string | null;
+  nama: string;
+  penjualan: number;
+  qtyTerjual: number;
+  biayaBahanTercatat: number;
+  selisih: number;
+};
+
+type BarisTransaksi = { jenis: string; jumlah: number | string; qty?: number | string | null; product_id?: string | null; kategori_biaya?: string | null; produk_terkait_id?: string | null };
+
+/**
+ * Membandingkan penjualan tiap produk dengan biaya bahan yang dicatat untuk produk itu.
+ * Biaya bahan tanpa relasi produk dikumpulkan di satu baris "Belum dikaitkan ke produk".
+ * Selisih = penjualan dikurangi biaya bahan tercatat (bukan laba kotor: pemakaian bahan belum dihitung).
+ */
+export function ringkasBiayaPerProduk(rows: BarisTransaksi[], namaProduk: Map<string, string>): BiayaPerProduk[] {
+  const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const peta = new Map<string | null, BiayaPerProduk>();
+  const ambil = (id: string | null) => {
+    let item = peta.get(id);
+    if (!item) {
+      item = { produkId: id, nama: id === null ? 'Belum dikaitkan ke produk' : namaProduk.get(id) ?? 'Produk dihapus', penjualan: 0, qtyTerjual: 0, biayaBahanTercatat: 0, selisih: 0 };
+      peta.set(id, item);
+    }
+    return item;
+  };
+  for (const row of rows) {
+    if (row.jenis === 'penjualan' && row.product_id) {
+      const item = ambil(row.product_id);
+      item.penjualan += num(row.jumlah);
+      item.qtyTerjual += row.qty == null ? 1 : num(row.qty);
+    } else if (row.jenis === 'biaya' && row.kategori_biaya === 'bahan_produksi') {
+      ambil(row.produk_terkait_id ?? null).biayaBahanTercatat += num(row.jumlah);
+    }
+  }
+  return [...peta.values()]
+    .map((item) => ({ ...item, selisih: item.penjualan - item.biayaBahanTercatat }))
+    .sort((a, b) => (a.produkId === null ? 1 : 0) - (b.produkId === null ? 1 : 0) || b.penjualan - a.penjualan);
+}

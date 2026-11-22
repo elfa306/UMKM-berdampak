@@ -1200,7 +1200,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       });
       if (error) {
         sayAnswer(/set_transaction_expense_category|function/i.test(error.message)
-          ? 'Pengelompokan biaya belum aktif di database. Jalankan supabase/migration_v21_biaya_bahan_produksi.sql dulu ya.'
+          ? 'Pengelompokan biaya belum aktif di database. Jalankan supabase/migration_v21_biaya_bahan_produksi.sql dan migration_v22_biaya_bahan_per_produk.sql dulu ya.'
           : 'Maaf, kategori biayanya belum berhasil disimpan. Coba lagi sebentar lagi.', 'error');
       } else {
         announceTransactionSaved();
