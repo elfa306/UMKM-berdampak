@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
 import { todayISO, rupiah } from '@/lib/accounting';
 import { recordProactiveDismissed, useCashieProactive, type ProactiveAction, type ProactiveMessage } from '@/lib/cashieProactive';
+import { captureUserPlan, currentMemoryUserId, planReply, setPlanStatus } from '@/lib/cashieMemory';
 import { formatJam, parseOperatingHours, saveOperatingHours, type JamOperasional } from '@/lib/jamOperasional';
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'thinking';
@@ -47,6 +48,7 @@ type SpeechProgress = { text: string; visibleCount: number; activeIndex: number 
 type CardActions = { id: string; actions: ProactiveAction[] };
 type HoursProposal = { buka: string; tutup: string };
 type HoursAwait = { until: number; partial: JamOperasional };
+type PlanAwait = { until: number; planId: string };
 type Props = { variant?: 'mobile' | 'desktop' | 'global'; controlsVisible?: boolean; onManualRecord: (mode?: 'masuk' | 'keluar' | 'modal') => void };
 
 const MAX_RECORDING_MS = 35_000;
@@ -289,6 +291,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const hoursProposalRef = useRef<HoursProposal | null>(null);
   const hoursAwaitRef = useRef<HoursAwait | null>(null);
   const proactiveIdRef = useRef<string | null>(null);
+  const planAwaitRef = useRef<PlanAwait | null>(null);
   const historyRef = useRef<Message[]>([]);
   const pendingRef = useRef<PendingAction[]>([]);
   const pendingTokenRef = useRef<string | null>(null);
@@ -1035,7 +1038,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
 
     const partial = awaiting?.partial ?? { buka: null, tutup: null };
     let candidate = text;
-    if (!/\b(buka|mulai|tutup|selesai|closing|open)\b/.test(text)) {
+    if (!/\b(buka|mulai|tutup|selesai|closing|open)(nya)?\b/.test(text)) {
       if (partial.buka && !partial.tutup) candidate = `tutup ${text}`;
       else if (partial.tutup && !partial.buka) candidate = `buka ${text}`;
     }
@@ -1077,8 +1080,24 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       setPhase('idle');
       return;
     }
+    const followUp = planAwaitRef.current && planAwaitRef.current.until > Date.now() ? planAwaitRef.current : null;
+    const reply = followUp ? planReply(text) : null;
+    if (followUp && reply) {
+      planAwaitRef.current = null;
+      const userId = await currentMemoryUserId();
+      if (userId) setPlanStatus(userId, followUp.planId, reply === 'keep' ? 'open' : reply === 'done' ? 'done' : 'dropped');
+      sayAnswer(reply === 'done'
+        ? 'Mantap, saya tandai sudah selesai. Kalau ada yang perlu dicatat dari itu, ceritakan saja ya.'
+        : reply === 'drop'
+          ? 'Baik, saya hapus dari rencana. Tidak apa-apa.'
+          : 'Siap! Kalau sudah dikerjakan, ceritakan saja ya, nanti saya bantu catat.');
+      setPhase('idle');
+      return;
+    }
+    // Rencana yang disebut pemilik ("besok mau beli bahan") diingat untuk ditindaklanjuti, tanpa menghentikan percakapan.
+    void captureUserPlan(text, todayISO());
     await sendMessage(text);
-  }, [handleConfirmation, handleHoursSpeech, revisePendingAction, sendMessage]);
+  }, [handleConfirmation, handleHoursSpeech, revisePendingAction, sayAnswer, sendMessage]);
 
   const processAudio = useCallback(async (blob: Blob, mime: string) => {
     const turnId = ++activeTurnRef.current;
@@ -1384,6 +1403,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     proactiveIdRef.current = id;
     if (id && message.actions.length) setCardActions({ id, actions: message.actions });
     historyRef.current = [...historyRef.current, { id: crypto.randomUUID(), role: 'assistant' as const, content: message.text }].slice(-12);
+    if (message.intent?.type === 'plan_followup') planAwaitRef.current = { until: Date.now() + HOURS_AWAIT_MS, planId: message.intent.planId };
     if (askHours) {
       hoursAwaitRef.current = {
         until: Date.now() + HOURS_AWAIT_MS,

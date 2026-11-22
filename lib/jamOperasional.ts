@@ -74,8 +74,8 @@ export function parseOperatingHours(raw: string): JamOperasional | null {
   }
   if (!tokens.length) return null;
 
-  const closeIndex = text.search(/\b(tutup|closing|selesai)\b/);
-  const openIndex = text.search(/\b(buka|mulai|open)\b/);
+  const closeIndex = text.search(/\b(tutup|closing|selesai)(nya)?\b/);
+  const openIndex = text.search(/\b(buka|mulai|open)(nya)?\b/);
 
   let buka: string | null = null;
   let tutup: string | null = null;

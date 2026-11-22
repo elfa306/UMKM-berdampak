@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { supabase } from './supabase';
 import { rupiah, todayISO } from './accounting';
 import { TRANSACTION_SAVED_EVENT, type QuickSavedDetail } from './quickSession';
+import { completeBuyPlans, duePlansFor, markPlanAsked, type DuePlan } from './cashieMemory';
 import { PROFILE_HOURS_EVENT, formatJam, isValidJam, jamKeMenit, menitKeJam } from './jamOperasional';
 
 /**
@@ -69,10 +70,16 @@ export type ProactiveSnapshot = {
   salesDrop: { recentAvg: number; priorAvg: number } | null;
   unusualExpense: { label: string; amount: number } | null;
   missingRecurring: { key: string; label: string } | null;
+  weekSalesTotal: number;
+  prevWeekSalesTotal: number;
+  /** Rencana yang pernah disebut pemilik dan sudah waktunya ditindaklanjuti (memori aktivitas usaha). */
+  duePlans: DuePlan[];
 };
 
 export type ProactiveAction = 'record_sale' | 'record_expense' | 'open_report' | 'open_settings';
-export type ProactiveIntent = { type: 'ask_hours'; suggestion: { buka: string; tutup: string } | null };
+export type ProactiveIntent =
+  | { type: 'ask_hours'; suggestion: { buka: string; tutup: string } | null }
+  | { type: 'plan_followup'; planId: string };
 export type ProactiveMessage = { id: string; text: string; actions: ProactiveAction[]; intent?: ProactiveIntent };
 type Candidate = ProactiveMessage & { cooldownDays: number };
 
@@ -109,6 +116,7 @@ const DEFAULT_WINDOWS: Windows = {
 };
 
 let activeMemoryKey: string | null = null;
+let activeUserId: string | null = null;
 
 const wibDate = (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
 const wibMinute = (iso: string) => {
@@ -182,7 +190,7 @@ function inferHours(rows: Tx[]): { buka: string; tutup: string } | null {
 }
 
 /** Mengubah baris transaksi mentah menjadi ringkasan kondisi usaha. Murni, mudah diuji. */
-export function buildSnapshot(userId: string, raw: RawTx[], today: string, profile: ProfileInfo = DEFAULT_PROFILE): ProactiveSnapshot {
+export function buildSnapshot(userId: string, raw: RawTx[], today: string, profile: ProfileInfo = DEFAULT_PROFILE, duePlans: DuePlan[] = []): ProactiveSnapshot {
   const rows: Tx[] = [];
   for (const item of raw) {
     if (item.jenis !== 'penjualan' && item.jenis !== 'biaya') continue;
@@ -303,6 +311,9 @@ export function buildSnapshot(userId: string, raw: RawTx[], today: string, profi
     salesDrop,
     unusualExpense,
     missingRecurring,
+    weekSalesTotal: sum(weekSales),
+    prevWeekSalesTotal: sum(prevWeekSales),
+    duePlans,
   };
 }
 
@@ -360,6 +371,20 @@ export function proactiveCandidates(s: ProactiveSnapshot, date: Date, memory: Pi
     }
   }
 
+  // Teman yang baik ingat apa yang kamu rencanakan dan menanyakannya, tanpa memaksa.
+  const plan = s.duePlans[0];
+  if (plan && (inWin(now, windows.morning) || inWin(now, windows.insight))) {
+    const when = plan.daysAgo <= 1 ? 'Kemarin' : `${plan.daysAgo} hari lalu`;
+    const text = {
+      beli_bahan: `${when} kamu bilang mau beli bahan. Rencana itu masih berlaku?`,
+      produksi: `${when} kamu berencana menyiapkan produksi. Bagaimana, sudah jalan?`,
+      harga: `${when} kita berencana mengevaluasi harga jual. Mau kita lanjutkan sekarang?`,
+      varian: `${when} kamu ingin mencoba varian baru. Jadi bagaimana?`,
+    }[plan.kind];
+    const actions: ProactiveAction[] = plan.kind === 'beli_bahan' ? ['record_expense'] : plan.kind === 'harga' ? ['open_report'] : [];
+    add(`plan-${plan.id}`, text, 1, actions, { type: 'plan_followup', planId: plan.id });
+  }
+
   if (inWin(now, windows.morning)) {
     if (s.yesterdaySales.count > 0) {
       const topName = s.yesterdaySales.topName ? ` ${capitalize(s.yesterdaySales.topName)} paling banyak terjual.` : '';
@@ -393,6 +418,9 @@ export function proactiveCandidates(s: ProactiveSnapshot, date: Date, memory: Pi
     }
     if (s.risingProduct) {
       add('insight-rising-product', `Penjualan ${s.risingProduct.label} meningkat dibanding minggu lalu. Apakah kamu ingin menambah produksinya?`, 3);
+    }
+    if (s.prevWeekSalesTotal >= 50_000 && s.weekSalesTotal >= s.prevWeekSalesTotal * 1.15) {
+      add('insight-sales-up', `Penjualan 7 hari terakhir ${rupiah(s.weekSalesTotal)}, naik dari ${rupiah(s.prevWeekSalesTotal)} di minggu sebelumnya. Mantap, pencatatannya juga rapi!`, 7);
     }
     if (s.topProduct) {
       add('insight-top-product', `Yang paling banyak terjual minggu ini adalah ${s.topProduct.label}.`, 7);
@@ -557,6 +585,7 @@ async function loadSnapshot(): Promise<ProactiveSnapshot | null> {
   const user = authData.user;
   if (!user) return null;
   activeMemoryKey = `cava:cashie-proactive:v2:${user.id}`;
+  activeUserId = user.id;
   const since = new Date(Date.now() - 70 * DAY_MS).toISOString();
   const { data, error } = await supabase
     .from('transactions')
@@ -585,7 +614,8 @@ async function loadSnapshot(): Promise<ProactiveSnapshot | null> {
     const row = basic.error ? null : (basic.data as ProfileRow | null);
     profile = { exists: Boolean(row), name: row?.nama_usaha ?? null, jamBuka: null, jamTutup: null, hoursSupported: false };
   }
-  return buildSnapshot(user.id, data as RawTx[], todayISO(), profile);
+  const today = todayISO();
+  return buildSnapshot(user.id, data as RawTx[], today, profile, duePlansFor(user.id, today));
 }
 
 type Options = {
@@ -639,6 +669,7 @@ export function useCashieProactive({ enabled, canInterrupt, deliver }: Options) 
         memory.lastAt = Date.now();
         memory.seen[candidate.id] = day;
         writeMemory(activeMemoryKey, memory);
+        if (candidate.intent?.type === 'plan_followup' && activeUserId) markPlanAsked(activeUserId, candidate.intent.planId, day);
         deliverRef.current(candidate);
       } catch (error) {
         console.warn('Cashie proaktif tidak dapat dijalankan:', error);
@@ -683,6 +714,10 @@ export function useCashieProactive({ enabled, canInterrupt, deliver }: Options) 
       snapshotAt = 0;
       const detail = (event as CustomEvent<QuickSavedDetail | undefined>).detail;
       if (!detail || detail.guest || !detail.rows?.length) return;
+      // Pembelian yang baru dicatat menuntaskan rencana "beli bahan" tanpa perlu ditanya lagi.
+      if (activeUserId && detail.rows.some((row) => row.jenis === 'biaya' && Number(row.jumlah) >= 20_000 && !RECURRING.test(row.keterangan.toLowerCase()))) {
+        completeBuyPlans(activeUserId);
+      }
       window.setTimeout(() => void react(detail), 2200);
     };
     document.addEventListener('visibilitychange', onVisible);
