@@ -658,9 +658,6 @@ export default function Kasir() {
             <p className="m-0 mt-1 text-[2rem] font-extrabold leading-tight tabular-nums tracking-tight text-[#103A57]">
               {sembunyikanNominal ? 'Rp •••••••' : rupiah(untungBersih)}
             </p>
-            <p className="mt-1 text-[10px] leading-4 text-[#668091]">
-              Tagihan rutin seperti gas dan listrik tetap tercatat sebagai uang keluar, tetapi masuk perhitungan laporan bulanan, bukan dibebankan penuh ke untung hari ini.
-            </p>
 
             <div className="mt-4 grid grid-cols-2 divide-x divide-[#103A57]/10">
               <div className="pr-4">
