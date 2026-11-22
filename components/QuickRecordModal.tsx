@@ -174,7 +174,7 @@ export default function QuickRecordModal({
     let aktif = true;
     void (async () => {
       const { data } = await supabase.from('products').select('id,nama')
-        .eq('aktif', true).in('jenis_item', ['finished_good', 'merchandise']).order('nama').limit(100);
+        .eq('aktif', true).in('jenis_item', ['finished_good', 'merchandise', 'service']).order('nama').limit(100);
       if (aktif && data?.length) setProdukKatalog(data as Array<{ id: string; nama: string }>);
     })();
     return () => { aktif = false; };
