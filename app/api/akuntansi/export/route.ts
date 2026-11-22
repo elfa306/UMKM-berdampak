@@ -165,8 +165,10 @@ export async function GET(request: Request) {
     const revenueLabel = kind === 'jasa' ? 'Pendapatan jasa' : kind === 'campuran' ? 'Pendapatan produk dan jasa' : 'Pendapatan penjualan';
     const cogsLabel = kind === 'jasa' ? 'Biaya langsung jasa' : kind === 'manufaktur' ? 'Harga pokok produk terjual' : kind === 'campuran' ? 'HPP dan biaya langsung' : 'Harga pokok penjualan';
     const profitRows = [
-      [revenueLabel, money(snapshot.profitLoss.revenue)], [cogsLabel, money(snapshot.profitLoss.cogs)],
-      ['Laba kotor', money(snapshot.profitLoss.grossProfit)], ['Beban operasional', money(snapshot.profitLoss.operatingExpenses)],
+      [revenueLabel, money(snapshot.profitLoss.revenue)],
+      ...(snapshot.profitLoss.cogs > 0 ? [[cogsLabel, money(snapshot.profitLoss.cogs)], ['Laba kotor', money(snapshot.profitLoss.grossProfit)]] : []),
+      ...(snapshot.profitLoss.materialCosts > 0 ? [['Biaya bahan produksi tercatat (estimasi pembelian, bukan pemakaian)', money(snapshot.profitLoss.materialCosts)], ['Selisih setelah biaya bahan tercatat', money(snapshot.profitLoss.afterRecordedMaterials)]] : []),
+      ['Beban operasional', money(snapshot.profitLoss.operatingExpenses)],
       ['Beban lainnya', money(snapshot.profitLoss.otherExpenses)], ['LABA / (RUGI) BERSIH', money(snapshot.profitLoss.netProfit)],
     ];
     for (const row of profitRows) summary.addRow(row);
@@ -272,7 +274,8 @@ export async function GET(request: Request) {
       selectedAccounts = monthly.filter((a) => ['1210', '1220', '1230', '2110', '2120', '5000', '5100', '5200', '4000', '6000', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
       metrics = [
         ['Penjualan produk', money(snapshot.profitLoss.revenue), 'Pendapatan dari penjualan hasil produksi.'],
-        ['HPP produk terjual', money(snapshot.profitLoss.cogs), 'Biaya pokok produk yang sudah terjual.'],
+        ['HPP produk terjual', money(snapshot.profitLoss.cogs), 'Hanya HPP yang dijurnal saat produk terjual. Bahan yang dibeli tidak otomatis dianggap terpakai.'],
+        ['Biaya bahan produksi tercatat', money(snapshot.profitLoss.materialCosts), 'Estimasi dari pembelian bahan yang dicatat; sisa bahan belum dikurangkan.'],
         ['Persediaan bahan baku (mutasi periode)', money(monthly.find((a) => a.code === '1210')?.balance), 'Mutasi jurnal akun bahan baku; bukan stok fisik akhir.'],
         ['Barang dalam proses (mutasi periode)', money(monthly.find((a) => a.code === '1220')?.balance), 'Mutasi jurnal barang dalam proses.'],
         ['Persediaan barang jadi (mutasi periode)', money(monthly.find((a) => a.code === '1230')?.balance), 'Mutasi jurnal barang jadi.'],
@@ -295,6 +298,9 @@ export async function GET(request: Request) {
         ['Laba kotor', money(snapshot.profitLoss.grossProfit), 'Pendapatan dikurangi HPP dan biaya langsung.'],
         ['Beban operasional', money(snapshot.profitLoss.operatingExpenses), 'Beban operasional yang dijurnal.'],
       ];
+    }
+    if (kind !== 'manufaktur' && snapshot.profitLoss.materialCosts > 0) {
+      metrics.push(['Biaya bahan produksi tercatat', money(snapshot.profitLoss.materialCosts), 'Estimasi dari pembelian bahan yang dicatat; bukan HPP dan bukan pemakaian bahan.']);
     }
     for (const [label, amount, note] of metrics) {
       specific.addRow([label, '', amount, '', amount, note]);

@@ -34,13 +34,15 @@ function calculate(entries: LedgerEntry[], lines: LedgerLine[], month?: string) 
   const monthAccounts = aggregate(currentLines);
   const sumBy = (accounts: ReturnType<typeof aggregate>, predicate: (a: ReturnType<typeof aggregate>[number]) => boolean) => accounts.filter(predicate).reduce((sum, a) => sum + a.balance, 0);
   const revenue = sumBy(monthAccounts, (a) => a.type === 'revenue');
-  // 5200 = biaya bahan produksi yang dibeli (estimasi sederhana, sisa persediaan tidak dihitung).
-  const cogs = sumBy(monthAccounts, (a) => ['5000', '5100', '5200'].includes(a.code));
+  // cogs = HPP yang dijurnal saat barang/jasa terjual (5000, 5100).
+  // 5200 = biaya bahan produksi yang dibeli: estimasi sederhana, bukan bahan yang terpakai, jadi dipisah dari HPP.
+  const cogs = sumBy(monthAccounts, (a) => ['5000', '5100'].includes(a.code));
   const materialCosts = sumBy(monthAccounts, (a) => a.code === '5200');
   const operatingExpenses = sumBy(monthAccounts, (a) => ['6000', '6100', '7000'].includes(a.code));
   const otherExpenses = sumBy(monthAccounts, (a) => a.type === 'expense' && !['5000', '5100', '5200', '6000', '6100', '7000'].includes(a.code));
   const grossProfit = revenue - cogs;
-  const netProfit = grossProfit - operatingExpenses - otherExpenses;
+  const afterRecordedMaterials = grossProfit - materialCosts;
+  const netProfit = afterRecordedMaterials - operatingExpenses - otherExpenses;
   const assets = sumBy(allAccounts, (a) => a.type === 'asset');
   const liabilities = sumBy(allAccounts, (a) => a.type === 'liability');
   const capitalAndOpening = sumBy(allAccounts, (a) => a.type === 'equity') - sumBy(allAccounts, (a) => a.type === 'contra_equity');
@@ -65,7 +67,7 @@ function calculate(entries: LedgerEntry[], lines: LedgerLine[], month?: string) 
   const totalCredit = currentLines.reduce((s, l) => s + num(l.credit), 0);
   return {
     period: range.month,
-    profitLoss: { revenue, cogs, materialCosts, grossProfit, operatingExpenses, otherExpenses, netProfit, grossMargin: revenue > 0 ? grossProfit / revenue : 0, netMargin: revenue > 0 ? netProfit / revenue : 0 },
+    profitLoss: { revenue, cogs, materialCosts, grossProfit, afterRecordedMaterials, operatingExpenses, otherExpenses, netProfit, grossMargin: revenue > 0 ? grossProfit / revenue : 0, netMargin: revenue > 0 ? netProfit / revenue : 0 },
     balanceSheet: { assets, liabilities, capital: capitalAndOpening, retainedEarnings: lifetimeNet, equity, difference: assets - liabilities - equity, cash },
     cashFlow,
     accounts: allAccounts.sort((a, b) => a.code.localeCompare(b.code)),
