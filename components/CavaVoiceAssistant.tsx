@@ -1,14 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion, useAnimationControls, useReducedMotion, type Variants } from 'framer-motion';
 import { Check, LoaderCircle, Volume2, VolumeX, X } from 'lucide-react';
 import { CavaVMark } from './CavaLogo';
 import { supabase } from '@/lib/supabase';
 import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
 import { todayISO, rupiah } from '@/lib/accounting';
+import { canSpeakProactively, hasSpokenProactiveToday, markProactiveDismissed, markProactiveEngaged, markProactiveSpoken } from '@/lib/cashieInterrupt';
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'thinking';
 type Message = { id: string; role: 'user' | 'assistant'; content: string; provider?: 'groq' | 'gemini' | 'openrouter' };
@@ -253,9 +254,26 @@ function decodeBase64Audio(encoded: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+// Gerak maskot Cashie menurut keadaan: diam, mendengarkan, berpikir, berbicara.
+const MASCOT_VARIANTS: Variants = {
+  idle: { y: 0, rotate: 0, scaleX: 1, scaleY: 1, transition: { duration: 0.3 } },
+  listening: { y: [0, -2, 0], rotate: [-3, 3, -3], scaleX: 1, scaleY: 1, transition: { duration: 1.4, repeat: Infinity, ease: 'easeInOut' } },
+  thinking: { y: 0, rotate: [-6, 6, -6], scaleX: 1, scaleY: 1, transition: { duration: 2.2, repeat: Infinity, ease: 'easeInOut' } },
+  speaking: { y: [0, -5, 0], rotate: 0, scaleX: [1, 0.98, 1.02, 1], scaleY: [1, 1.03, 0.98, 1], transition: { duration: 0.55, repeat: Infinity, ease: 'easeInOut' } },
+};
+type MascotMode = 'idle' | 'listening' | 'thinking' | 'speaking';
+
 export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible = true, onManualRecord }: Props) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
+  const asideControls = useAnimationControls();
+  const vButtonControls = useAnimationControls();
+  const asideRef = useRef<HTMLElement>(null);
+  const mobileButtonRef = useRef<HTMLButtonElement>(null);
+  const desktopButtonRef = useRef<HTMLButtonElement>(null);
+  const popOffsetRef = useRef({ x: 0, y: 56 });
+  const hadCardRef = useRef(false);
+  const proactiveIdRef = useRef<string | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [busySending, setBusySending] = useState(false);
   const [busySaving, setBusySaving] = useState(false);
@@ -341,6 +359,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     stickyResponseRef.current = sticky;
     setResponse(next);
     if (!sticky) scheduleResponseDismiss(next, 11_000);
+    return next.id;
   }, [scheduleResponseDismiss]);
 
   const stopTracks = useCallback(() => {
@@ -1011,6 +1030,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const beginRecording = useCallback(async () => {
     const canInterrupt = phase === 'thinking' || phase === 'transcribing' || speaking || loadingSpeech;
     if ((phase !== 'idle' && !canInterrupt) || busySaving || savingRef.current) return;
+    markProactiveEngaged();
+    proactiveIdRef.current = null;
     if (canInterrupt) {
       activeTurnRef.current += 1;
       chatAbortRef.current?.abort();
@@ -1097,6 +1118,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const cancelCurrentTurn = useCallback(() => {
     // A database write already in progress cannot be rolled back by dismissing the card.
     if (savingRef.current) return;
+    // Pesan proaktif yang ditutup tanpa ditanggapi dihitung agar Cashie tidak terus menyela.
+    if (proactiveIdRef.current && responseRef.current?.id === proactiveIdRef.current) markProactiveDismissed();
+    proactiveIdRef.current = null;
     activeTurnRef.current += 1;
     cancelledRef.current = true;
     pressedRef.current = false;
@@ -1197,6 +1221,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     }
     if (tapClickPendingRef.current) {
       tapClickPendingRef.current = false;
+      markProactiveEngaged();
+      proactiveIdRef.current = null;
       onManualRecord();
     }
   };
@@ -1243,28 +1269,23 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   };
 
   // Cashie menyapa sekali sehari saat pengguna pertama kali membuka area usaha.
-  // Sapaan tidak memotong aktivitas yang sedang berlangsung atau pesan lain.
+  // Semua pesan yang datang atas inisiatif Cashie lewat aturan di lib/cashieInterrupt.ts
+  // (jeda antar pesan, batas harian, tidak menyela dialog, diam jika sering ditutup).
   useEffect(() => {
     if (variant !== 'global' || !controlsVisible || greetingShownRef.current) return;
     if (typeof window === 'undefined') return;
 
-    const greetingKey = `cava:cashie-greeting:${todayISO()}`;
-    try {
-      if (window.localStorage.getItem(greetingKey) === '1') {
-        greetingShownRef.current = true;
-        return;
-      }
-    } catch {
-      // Penyimpanan lokal yang diblokir tidak boleh mengganggu asisten.
+    if (hasSpokenProactiveToday('greeting')) {
+      greetingShownRef.current = true;
+      return;
     }
 
     const timer = window.setTimeout(() => {
       if (phase !== 'idle' || responseRef.current || pendingRef.current.length) return;
+      if (!canSpeakProactively('greeting')) return;
 
       greetingShownRef.current = true;
-      try { window.localStorage.setItem(greetingKey, '1'); } catch {
-        // Sapaan tetap dapat tampil walau penyimpanan lokal tidak tersedia.
-      }
+      markProactiveSpoken('greeting');
 
       const hour = Number(new Intl.DateTimeFormat('en-GB', {
         hour: '2-digit',
@@ -1275,8 +1296,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         : hour < 15 ? 'selamat siang'
         : hour < 18 ? 'selamat sore' : 'selamat malam';
       const greeting = `Halo, ${timeGreeting}! Ada yang ingin kamu siapkan untuk usaha hari ini?`;
-      const greetingId = crypto.randomUUID();
-      showResponse(greeting, 'answer');
+      const greetingId = showResponse(greeting, 'answer');
+      proactiveIdRef.current = greetingId;
       if (voiceEnabledRef.current) void speakText(greetingId, greeting);
     }, 1400);
 
@@ -1321,12 +1342,61 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const progressiveChunks = response ? speechDisplayChunks(response.text) : [];
   const isPreparingResponseAudio = Boolean(response && voiceEnabled && loadingSpeech && speechProgress?.text === response.text);
   const isPlayingResponseAudio = Boolean(response && voiceEnabled && speaking && speechProgress?.text === response.text);
+  const mascotMode: MascotMode = isActive ? 'listening' : isBusy ? 'thinking' : (speaking || isPlayingResponseAudio) ? 'speaking' : 'idle';
+  const micAverage = isActive ? micLevels.reduce((sum, level) => sum + level, 0) / micLevels.length : 0;
+
+  // Posisi tombol V relatif terhadap kartu Cashie: kartu "keluar dari" dan "masuk ke" tombol itu.
+  const measurePopOffset = useCallback(() => {
+    const aside = asideRef.current;
+    const button = [mobileButtonRef.current, desktopButtonRef.current]
+      .find((el) => el !== null && el.getBoundingClientRect().width > 0) ?? null;
+    if (!aside || !button) return popOffsetRef.current;
+    const from = aside.getBoundingClientRect();
+    if (from.width === 0) return popOffsetRef.current;
+    const to = button.getBoundingClientRect();
+    let x = to.left + to.width / 2 - (from.left + from.width / 2);
+    let y = to.top + to.height / 2 - (from.top + from.height / 2);
+    const distance = Math.hypot(x, y);
+    const maxDistance = 420; // di desktop tombol jauh; batasi supaya gerakannya tetap wajar
+    if (distance > maxDistance) { x *= maxDistance / distance; y *= maxDistance / distance; }
+    popOffsetRef.current = { x, y };
+    return popOffsetRef.current;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (hasVisibleCard) {
+      hadCardRef.current = true;
+      const offset = measurePopOffset();
+      if (reduceMotion) {
+        asideControls.set({ opacity: 0, x: 0, y: 0, scale: 1 });
+        void asideControls.start({ opacity: 1, transition: { duration: 0.15 } });
+      } else {
+        asideControls.set({ opacity: 0, x: offset.x, y: offset.y, scale: 0.16 });
+        void asideControls.start({ opacity: 1, x: 0, y: 0, scale: 1, transition: { type: 'spring', stiffness: 330, damping: 27, mass: 0.72 } });
+        // Tombol V "mengeluarkan" Cashie: menekan sebentar lalu memantul.
+        void vButtonControls.start({ scale: [1, 0.86, 1.08, 1], transition: { duration: 0.42, times: [0, 0.3, 0.65, 1] } });
+      }
+      return;
+    }
+    if (hadCardRef.current) {
+      hadCardRef.current = false;
+      if (!reduceMotion) {
+        // Tombol V "menerima" Cashie kembali setelah kartu masuk.
+        const timer = window.setTimeout(() => {
+          void vButtonControls.start({ scale: [1, 1.12, 0.96, 1], transition: { duration: 0.38, times: [0, 0.35, 0.7, 1] } });
+        }, 220);
+        return () => window.clearTimeout(timer);
+      }
+    }
+  }, [asideControls, hasVisibleCard, measurePopOffset, reduceMotion, vButtonControls]);
 
   return (
     <>
       {(variant === 'mobile' || variant === 'global') && controlsVisible && (
         <div className={variant === 'global' ? 'fixed bottom-[calc(8px+env(safe-area-inset-bottom))] left-1/2 z-[55] flex -translate-x-1/2 flex-col items-center lg:hidden' : 'flex flex-col items-center'}>
-          <button
+          <motion.button
+            ref={mobileButtonRef}
+            animate={vButtonControls}
             type="button"
             onPointerDown={handlePointerDown} onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerCancel} onClick={handleButtonClick}
@@ -1337,13 +1407,14 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
             className={`-mt-7 flex h-14 items-center justify-center gap-2 rounded-full bg-[#103A57] text-white shadow-[0_8px_18px_rgba(16,58,87,0.35)] ring-4 ring-white transition-[width,background-color] duration-200 touch-none select-none ${isActive ? 'w-[124px] px-3' : 'w-14'}`}
           >
             {isActive ? <><CavaVMark size={22}/><span className="flex h-6 items-center gap-[2px]" aria-hidden="true">{micLevels.slice(5, 21).map((level, index) => <span key={index} className="w-[2px] rounded-full bg-white/90" style={{ height: `${Math.max(4, 4 + level * 18)}px` }} />)}</span></> : <CavaVMark size={28}/>}
-          </button>
+          </motion.button>
           <span className="mt-0.5 py-1 text-[10px] font-extrabold text-[#103A57]">Catat</span>
         </div>
       )}
       {(variant === 'desktop' || variant === 'global') && controlsVisible && (
         <div className={variant === 'global' ? 'fixed left-5 top-[88px] z-[55] hidden w-56 lg:block' : 'w-full'}>
           <button
+            ref={desktopButtonRef}
             type="button"
             onPointerDown={handlePointerDown} onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerCancel} onClick={handleButtonClick}
@@ -1361,12 +1432,14 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       <AnimatePresence>
         {hasVisibleCard && (
           <motion.aside
-            initial={reduceMotion ? false : { opacity: 0, y: 58, scale: 0.16 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={reduceMotion ? undefined : { opacity: 0, y: 58, scale: 0.16 }}
-            transition={{ type: 'spring', stiffness: 330, damping: 27, mass: 0.72 }}
-            style={{ transformOrigin: '50% 100%' }}
-            className="fixed bottom-[calc(88px+env(safe-area-inset-bottom))] left-3 right-3 z-[70] mx-auto flex w-auto max-w-[460px] items-end justify-end gap-2 origin-bottom lg:bottom-6 lg:left-auto lg:right-6 lg:mx-0 lg:w-[min(460px,calc(100vw-300px))] lg:max-w-[460px]"
+            ref={asideRef}
+            initial={false}
+            animate={asideControls}
+            exit={reduceMotion
+              ? { opacity: 0, transition: { duration: 0.15 } }
+              : { opacity: 0, x: popOffsetRef.current.x, y: popOffsetRef.current.y, scale: 0.16, transition: { type: 'spring', stiffness: 380, damping: 32, mass: 0.7 } }}
+            style={{ transformOrigin: '50% 50%' }}
+            className="fixed bottom-[calc(88px+env(safe-area-inset-bottom))] left-3 right-3 z-[70] mx-auto flex w-auto max-w-[460px] items-end justify-end gap-2 lg:bottom-6 lg:left-auto lg:right-6 lg:mx-0 lg:w-[min(460px,calc(100vw-300px))] lg:max-w-[460px]"
           >
             <div
               className="max-h-[min(54vh,430px)] min-w-0 w-[min(276px,calc(100vw-112px))] overflow-y-auto rounded-[20px] rounded-br-md border border-[#103A57]/10 bg-white/95 p-3 shadow-[0_14px_38px_rgba(16,58,87,0.18)] backdrop-blur-sm"
@@ -1376,7 +1449,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
               <div className="mb-1.5 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-extrabold tracking-wide text-[#103A57]">Cashie</span>
-                  {isBusy && <span className="h-1.5 w-1.5 rounded-full bg-[#307B8E] animate-pulse" />}
+                  {isBusy && <span className="cashie-dots" aria-hidden="true"><span /><span /><span /></span>}
                 </div>
                 {response?.kind === 'confirm' && <span className="rounded-full bg-[#FFF4D9] px-2 py-0.5 text-[9px] font-bold text-[#805600]">Konfirmasi</span>}
               </div>
@@ -1434,11 +1507,20 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
             </div>
             <motion.div
               className="relative mb-0 h-[96px] w-[72px] shrink-0 drop-shadow-[0_8px_12px_rgba(16,58,87,0.16)]"
-              animate={isBusy || speaking ? { y: [0, -3, 0] } : { y: 0 }}
-              transition={{ duration: 1.8, repeat: isBusy || speaking ? Infinity : 0, ease: 'easeInOut' }}
+              variants={MASCOT_VARIANTS}
+              animate={reduceMotion ? 'idle' : mascotMode}
+              style={{ transformOrigin: '50% 100%' }}
               aria-hidden="true"
             >
-              <Image src="/cashie-mascot.webp" alt="" fill sizes="72px" className="object-contain object-bottom" priority={isActive}/>
+              {/* Saat mendengarkan, ukuran maskot mengikuti volume suara pengguna. */}
+              <motion.div
+                className="relative h-full w-full"
+                animate={{ scale: reduceMotion ? 1 : 1 + micAverage * 0.08 }}
+                transition={{ duration: 0.08, ease: 'linear' }}
+                style={{ transformOrigin: '50% 100%' }}
+              >
+                <Image src="/cashie-mascot.webp" alt="" fill sizes="72px" className="object-contain object-bottom" priority={isActive}/>
+              </motion.div>
             </motion.div>
           </motion.aside>
         )}
