@@ -700,7 +700,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       let activeProducts: Array<{ id: string; nama: string }> = [];
       if (saleNames.length) {
         const { data: catalog } = await supabase.from('products').select('id,nama')
-          .eq('user_id', authData.user.id).eq('aktif', true);
+          .eq('user_id', authData.user.id).eq('aktif', true).in('jenis_item', ['finished_good', 'merchandise', 'service']);
         activeProducts = (catalog ?? []) as Array<{ id: string; nama: string }>;
       }
       const unlinkedSaleProducts = new Set<string>();
