@@ -705,7 +705,12 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       }
       const unlinkedSaleProducts = new Set<string>();
       const payload = items.map((item) => {
-        const row: Record<string, unknown> = {
+        let productId: string | null = null;
+        if (item.jenis === 'penjualan' && item.produk_terjual?.trim()) {
+          productId = cocokkanProdukTepat(item.produk_terjual, activeProducts);
+          if (!productId) unlinkedSaleProducts.add(item.produk_terjual.trim());
+        }
+        const row = {
           session_id: sessionId,
           user_id: authData.user.id,
           jenis: item.jenis,
@@ -714,12 +719,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
           qty: item.qty,
           metode: item.metode,
         };
-        if (item.jenis === 'penjualan' && item.produk_terjual?.trim()) {
-          const productId = cocokkanProdukTepat(item.produk_terjual, activeProducts);
-          if (productId) row.product_id = productId;
-          else unlinkedSaleProducts.add(item.produk_terjual.trim());
-        }
-        return row;
+        return productId ? { ...row, product_id: productId } : row;
       });
       // Pembelian bahan untuk produk tertentu: nama produk dikirim, database mencocokkannya ke katalog (migration v23).
       const dengan = items.map((item, index) => {
