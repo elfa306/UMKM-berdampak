@@ -9,6 +9,8 @@ export type ProposedTransaction = {
   jumlah: number;
   qty: number;
   metode: 'tunai' | 'qris' | null;
+  /** Nama produk yang dibuat dari bahan ini; hanya untuk pengeluaran bahan produksi. */
+  produk_terkait?: string;
 };
 
 export type NavigateAction = { type: 'navigate'; path: string; label: string };
@@ -568,7 +570,8 @@ export async function generateAssistantReply(
       const metode = action.metode === 'tunai' || action.metode === 'qris' ? action.metode : null;
       const qty = action.qty === undefined ? 1 : Number(action.qty);
       if ((jenis !== 'penjualan' && jenis !== 'biaya') || !validPrice(jumlah) || !Number.isSafeInteger(qty) || qty < 1 || qty > 100_000 || !keterangan) return [];
-      return [{ type: 'transaction', jenis, jumlah, qty, keterangan, metode }];
+      const produk = jenis === 'biaya' && typeof action.produk_terkait === 'string' ? action.produk_terkait.trim().slice(0, 100) : '';
+      return [{ type: 'transaction', jenis, jumlah, qty, keterangan, metode, ...(produk ? { produk_terkait: produk } : {}) }];
     }
     if (action.type === 'transaction_delete') {
       const transactionId = action.transaction_id;
@@ -614,7 +617,9 @@ export async function generateAssistantReply(
       const rawName = action.nama;
       const jenis = action.jenis_item;
       const harga = Number(action.harga);
-      const hargaPokok = Number(action.harga_pokok);
+      // Harga pokok tidak wajib untuk barang dagangan, produk sendiri, dan jasa; kosong dianggap 0. Bahan baku tetap wajib jelas.
+      const hargaPokokKosong = action.harga_pokok === undefined || action.harga_pokok === null || action.harga_pokok === '';
+      const hargaPokok = hargaPokokKosong && jenis !== 'raw_material' && jenis !== 'work_in_progress' ? 0 : Number(action.harga_pokok);
       if (!validText(rawName, 100) || rawName.trim().length < 2 || !productKinds.has(jenis as ProductKind) || !validPrice(harga, jenis === 'raw_material' || jenis === 'work_in_progress') || !validPrice(hargaPokok, true)) return [];
       const rawSku = action.sku;
       const sku = rawSku === null || rawSku === undefined || rawSku === '' ? null : (validText(rawSku, 32) ? rawSku.trim() : undefined);

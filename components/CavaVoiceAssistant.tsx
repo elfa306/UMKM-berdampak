@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
 import { todayISO, rupiah } from '@/lib/accounting';
 import { recordProactiveDismissed, useCashieProactive, type ProactiveAction, type ProactiveMessage } from '@/lib/cashieProactive';
-import { jawabanKategori, kolomKategoriBelumAda, tandaiBiaya } from '@/lib/biayaBahan';
+import { jawabanKategori, klasifikasiBiaya, kolomKategoriBelumAda, kolomProdukBelumAda, tandaiBiaya, tanpaKolomProduk } from '@/lib/biayaBahan';
 import { matchLocalExport } from '@/lib/cashieIntents';
 import { captureUserPlan, currentMemoryUserId, planAcknowledgement, planReply, setPlanStatus } from '@/lib/cashieMemory';
 import { formatJam, parseOperatingHours, saveOperatingHours, type JamOperasional } from '@/lib/jamOperasional';
@@ -24,6 +24,7 @@ type PendingTransaction = {
   jumlah: number;
   qty: number;
   metode: 'tunai' | 'qris' | null;
+  produk_terkait?: string;
 };
 type PendingTransactionDelete = { type: 'transaction_delete'; transaction_id: string; description: string; amount: number; date: string; jenis: 'penjualan' | 'biaya' };
 type PendingOpeningBalanceSetup = { type: 'opening_balance_setup'; cash_amount: number; bank_amount: number };
@@ -703,8 +704,17 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         qty: item.qty,
         metode: item.metode,
       }));
-      // Biaya bahan dibedakan dari biaya operasional; sebelum migration v21 dijalankan, simpan tanpa kategori.
-      let { data, error: insertError } = await supabase.from('transactions').insert(tandaiBiaya(payload)).select('*');
+      // Pembelian bahan untuk produk tertentu: nama produk dikirim, database mencocokkannya ke katalog (migration v23).
+      const dengan = items.map((item, index) => {
+        const produk = item.jenis === 'biaya' ? item.produk_terkait?.trim().slice(0, 100) : '';
+        if (!produk) return payload[index];
+        const kategori = klasifikasiBiaya(item.keterangan) === 'operasional' ? {} : { kategori_biaya: 'bahan_produksi' as const };
+        return { ...payload[index], produk_terkait: produk, ...kategori };
+      });
+      // Biaya bahan dibedakan dari biaya operasional. Sebelum migration v22 dijalankan simpan tanpa relasi produk,
+      // dan sebelum v21 tanpa kategori juga.
+      let { data, error: insertError } = await supabase.from('transactions').insert(tandaiBiaya(dengan)).select('*');
+      if (insertError && kolomProdukBelumAda(insertError.message)) ({ data, error: insertError } = await supabase.from('transactions').insert(tandaiBiaya(dengan.map(tanpaKolomProduk))).select('*'));
       if (insertError && kolomKategoriBelumAda(insertError.message)) ({ data, error: insertError } = await supabase.from('transactions').insert(payload).select('*'));
       if (insertError || !data) throw new Error(insertError?.message || 'Transaksi belum berhasil disimpan.');
 

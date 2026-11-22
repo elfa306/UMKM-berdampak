@@ -33,6 +33,17 @@ export function tandaiBiaya<T extends { jenis: string; keterangan: string; kateg
   });
 }
 
+/** True bila galat database menandakan kolom relasi produk belum ada (migration v22 belum dijalankan). */
+export function kolomProdukBelumAda(message?: string | null): boolean {
+  return Boolean(message && /produk_terkait/i.test(message));
+}
+
+/** Membuang kolom relasi produk dari payload (untuk mengulang simpan sebelum migration v22 dijalankan). */
+export function tanpaKolomProduk<T extends Record<string, unknown>>(row: T): Omit<T, 'produk_terkait' | 'produk_terkait_id'> {
+  const { produk_terkait: _nama, produk_terkait_id: _id, ...sisa } = row;
+  return sisa;
+}
+
 /** True bila galat database menandakan kolom kategori_biaya belum ada (migration v21 belum dijalankan). */
 export function kolomKategoriBelumAda(message?: string | null): boolean {
   return Boolean(message && /kategori_biaya|produk_terkait/i.test(message));

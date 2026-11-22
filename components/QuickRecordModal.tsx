@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { rupiah, todayISO } from '@/lib/accounting';
 import { kaChing } from '@/lib/sound';
 import { ensureTodaySession, type QuickSavedDetail } from '@/lib/quickSession';
-import { kategoriDariPilihan, kolomKategoriBelumAda } from '@/lib/biayaBahan';
+import { kategoriDariPilihan, kolomKategoriBelumAda, kolomProdukBelumAda, tanpaKolomProduk } from '@/lib/biayaBahan';
 import CavaLogo from './CavaLogo';
 import QrisCashier from './QrisCashier';
 import Modal from './Modal';
@@ -34,6 +34,8 @@ export default function QuickRecordModal({
   const [loading, setLoading] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [kategoriBiaya, setKategoriBiaya] = useState('Belanja bahan baku');
+  const [produkBahanId, setProdukBahanId] = useState('');
+  const [produkKatalog, setProdukKatalog] = useState<Array<{ id: string; nama: string }>>([]);
   const [errMsg, setErrMsg] = useState('');
 
   // Quick preset amounts
@@ -70,6 +72,7 @@ export default function QuickRecordModal({
       setSavedSuccess(false);
       setNominalStr('');
       setKeterangan('');
+      setProdukBahanId('');
       setLoading(false);
       if (onSuccess) onSuccess(detail);
       onClose();
@@ -139,8 +142,14 @@ export default function QuickRecordModal({
         metode: metodeTx,
       };
       const simpan = (payload: Record<string, unknown>) => supabase.from('transactions').insert(payload).select('*').single();
-      let { data, error } = await simpan(jenis === 'biaya' ? { ...baris, kategori_biaya: kategoriDariPilihan(kategoriBiaya, note) } : baris);
-      // Sebelum migration v21 dijalankan, simpan tanpa kategori agar pencatatan tetap berjalan.
+      const kategori = jenis === 'biaya' ? kategoriDariPilihan(kategoriBiaya, note) : null;
+      const produk = kategori === 'bahan_produksi' ? produkKatalog.find((p) => p.id === produkBahanId) : undefined;
+      const lengkap = jenis === 'biaya'
+        ? { ...baris, kategori_biaya: kategori, ...(produk ? { produk_terkait_id: produk.id, produk_terkait: produk.nama } : {}) }
+        : baris;
+      let { data, error } = await simpan(lengkap);
+      // Sebelum migration v22 dijalankan, simpan tanpa relasi produk; sebelum v21, tanpa kategori juga.
+      if (error && kolomProdukBelumAda(error.message)) ({ data, error } = await simpan(tanpaKolomProduk(lengkap)));
       if (error && kolomKategoriBelumAda(error.message)) ({ data, error } = await simpan(baris));
 
       if (error || !data) {
@@ -155,6 +164,18 @@ export default function QuickRecordModal({
       setErrMsg('Tidak bisa menyimpan transaksi. Periksa koneksi internet lalu coba lagi.');
     }
   };
+
+  // Daftar produk untuk mengaitkan belanja bahan (opsional); tidak ada untuk mode tamu.
+  useEffect(() => {
+    if (!isOpen || type !== 'keluar' || kategoriBiaya !== 'Belanja bahan baku' || produkKatalog.length) return;
+    let aktif = true;
+    void (async () => {
+      const { data } = await supabase.from('products').select('id,nama')
+        .eq('aktif', true).in('jenis_item', ['finished_good', 'merchandise']).order('nama').limit(100);
+      if (aktif && data?.length) setProdukKatalog(data as Array<{ id: string; nama: string }>);
+    })();
+    return () => { aktif = false; };
+  }, [isOpen, type, kategoriBiaya, produkKatalog.length]);
 
   // Saat modal dibuka, pakai tab yang diminta pemanggil.
   useEffect(() => {
@@ -276,6 +297,17 @@ export default function QuickRecordModal({
                   <option value="Sewa & pemeliharaan">🏠 Sewa tempat / Alat</option>
                   <option value="Pengeluaran lainnya">📦 Lain-lain</option>
                 </select>
+                {kategoriBiaya === 'Belanja bahan baku' && produkKatalog.length > 0 && (
+                  <select
+                    aria-label="Bahan untuk produk (opsional)"
+                    value={produkBahanId}
+                    onChange={(e) => setProdukBahanId(e.target.value)}
+                    className="mt-2 w-full rounded-xl bg-white px-3 py-2.5 text-xs font-bold text-[#103A57]"
+                  >
+                    <option value="">Untuk produk apa? (boleh dikosongkan)</option>
+                    {produkKatalog.map((p) => <option key={p.id} value={p.id}>{p.nama}</option>)}
+                  </select>
+                )}
               </div>
             )}
 

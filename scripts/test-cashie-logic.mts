@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { parseOperatingHours } from '../lib/jamOperasional';
-import { klasifikasiBiaya, jawabanKategori, kategoriDariPilihan, ringkasBiayaPerProduk } from '../lib/biayaBahan';
+import { klasifikasiBiaya, jawabanKategori, kategoriDariPilihan, ringkasBiayaPerProduk, kolomProdukBelumAda, tanpaKolomProduk } from '../lib/biayaBahan';
 import { extractPlan, planReply } from '../lib/cashieMemory';
 import { matchLocalExport } from '../lib/cashieIntents';
 
@@ -71,6 +71,16 @@ t('biaya bahan tanpa produk masuk baris terpisah di akhir, operasional tidak iku
   assert.equal(hasil.length, 2);
   assert.equal(hasil[1].produkId, null);
   assert.equal(hasil[1].biayaBahanTercatat, 40000);
+});
+
+
+t('galat kolom produk dikenali (migration v22 belum dijalankan)', () => {
+  assert.equal(kolomProdukBelumAda('column "produk_terkait_id" of relation "transactions" does not exist'), true);
+  assert.equal(kolomProdukBelumAda("Could not find the 'kategori_biaya' column"), false);
+});
+t('tanpaKolomProduk membuang relasi produk dan menyisakan lainnya', () => {
+  const hasil = tanpaKolomProduk({ jenis: 'biaya', jumlah: 1, kategori_biaya: 'bahan_produksi', produk_terkait: 'Kue', produk_terkait_id: 'x' });
+  assert.deepEqual(hasil, { jenis: 'biaya', jumlah: 1, kategori_biaya: 'bahan_produksi' });
 });
 
 console.log(`\nLolos ${pass}, gagal ${fail}`);

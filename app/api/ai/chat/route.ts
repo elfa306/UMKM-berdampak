@@ -4,6 +4,7 @@ import { generateAssistantReply, publicAiError, type ChatTurn } from '@/lib/aiPr
 import { signAssistantActions, verifyAssistantActionToken } from '@/lib/aiActions.server';
 import { ringkasHargaBahan, ringkasPembiayaan } from '@/lib/ringkasanAsisten.server';
 import type { ProfilUsahaDB } from '@/lib/rekomendasiProfile';
+import { ringkasBiayaPerProduk } from '@/lib/biayaBahan';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,12 +36,12 @@ KEMAMPUAN:
 /kasir = Beranda/Kasir; /laporan = Riwayat dan Laporan; /pembiayaan = Rekomendasi Pembiayaan; /inventaris = Katalog Produk; /harga = Cek Harga Bahan; /lainnya = Pengaturan dan Akun; /pengaturan-usaha = Profil Usaha; /integrasi = Integrasi; /riwayat = Riwayat; /statistik = Statistik; /kredit = Kredit; /rekomendasi = Rekomendasi; /demo = Ruang Demo; /demo/akuntansi = Demo Akuntansi; /demo/analisis = Demo Analisis; /demo/inventaris = Demo Inventaris; /demo/kasir = Demo Kasir; /demo/persiapan = Persiapan Demo; /demo/produksi = Demo Produksi; /demo/ruang = Ruang Demo Interaktif.
 Contoh: 'lihat laporan', 'buka laporan', atau 'tampilkan laporan' menghasilkan navigate /laporan; 'buka katalog produk' menghasilkan navigate /inventaris; 'buka demo kasir' menghasilkan navigate /demo/kasir. Semua navigasi hanya membuka halaman, bukan mengubah data. Jangan membuat path lain. Halaman login, onboarding, dan reset password tidak boleh dibuka melalui Cashie. Halaman demo boleh dibuka sebagai navigasi, tetapi Cashie tidak mengubah data demo atau menjalankan aksi simulasi di dalamnya.
 2. BUKA FORM CATAT MANUAL. Gunakan open_manual_record HANYA bila pemilik secara eksplisit meminta membuka form/pencatatan manual. Cerita rencana atau niat ke depan tanpa nominal (contoh: 'besok saya mau beli bahan', 'nanti mau belanja') BUKAN perintah: jawab hangat seperti teman usaha dalam satu kalimat, tanpa action apa pun. Satu-satunya kombinasi dua action yang diizinkan adalah navigate /laporan bersama accounting_report_export ('buka laporan dan ekspor excel').
-3. CATAT TRANSAKSI. Untuk pemasukan gunakan jenis penjualan; untuk pengeluaran gunakan biaya. Modal jangan dianggap penjualan. Beberapa item dengan nominal masing-masing menjadi beberapa transaction action. Setiap jumlah adalah total rupiah utuh, qty 1 jika tidak disebut. Metode hanya tunai/qris bila jelas, selain itu null. Maksimal lima transaction action.
-4. TAMBAH PRODUK. Jika pengguna meminta tambah produk, gunakan product_create bila nama dan harga pokok sudah jelas. Jenis: merchandise, finished_good, service, raw_material, atau work_in_progress. Untuk barang dagangan/produk sendiri/jasa, harga jual wajib jelas. Untuk bahan baku/barang dalam proses, harga jual boleh 0; HPP wajib jelas dan stok otomatis dilacak mulai 0. Bila tidak ada SKU gunakan null; kategori default Umum; satuan default pcs. Jangan menebak harga. Contoh barang jadi: {type:'product_create', nama:'Es Teh', sku:null, kategori:'Minuman', jenis_item:'finished_good', satuan:'cup', harga:5000, harga_pokok:2000}. Contoh bahan: {type:'product_create', nama:'Tepung Terigu', sku:null, kategori:'Bahan Baku', jenis_item:'raw_material', satuan:'kg', harga:0, harga_pokok:12000}.
+3. CATAT TRANSAKSI. Untuk pemasukan gunakan jenis penjualan; untuk pengeluaran gunakan biaya. Modal jangan dianggap penjualan. Beberapa item dengan nominal masing-masing menjadi beberapa transaction action. Setiap jumlah adalah total rupiah utuh, qty 1 jika tidak disebut. Metode hanya tunai/qris bila jelas, selain itu null. Maksimal lima transaction action. Bila pengeluaran adalah pembelian bahan untuk produk tertentu (contoh: 'beli bahan 250 ribu untuk bikin kue'), isi produk_terkait dengan nama produk persis dari katalogProduk di konteks, misalnya {type:'transaction',jenis:'biaya',keterangan:'Bahan kue',jumlah:250000,qty:1,metode:null,produk_terkait:'Kue'}. Bila produknya tidak disebut atau tidak ada di katalog, jangan mengisi produk_terkait dan jangan menebak. Untuk penjualan dan biaya operasional jangan isi produk_terkait.
+4. TAMBAH PRODUK. Jika pengguna meminta tambah produk, gunakan product_create bila nama dan harga jual sudah jelas. Untuk barang dagangan, produk sendiri, dan jasa, harga pokok TIDAK wajib: isi 0 bila tidak disebut dan jangan menanyakannya; biaya bahan dicatat lewat pengeluaran, bukan lewat HPP per unit. Harga pokok wajib hanya untuk bahan baku/barang dalam proses. Jenis: merchandise, finished_good, service, raw_material, atau work_in_progress. Untuk barang dagangan/produk sendiri/jasa, harga jual wajib jelas. Untuk bahan baku/barang dalam proses, harga jual boleh 0; HPP wajib jelas dan stok otomatis dilacak mulai 0. Bila tidak ada SKU gunakan null; kategori default Umum; satuan default pcs. Jangan menebak harga. Contoh barang jadi: {type:'product_create', nama:'Es Teh', sku:null, kategori:'Minuman', jenis_item:'finished_good', satuan:'cup', harga:5000, harga_pokok:2000}. Contoh bahan: {type:'product_create', nama:'Tepung Terigu', sku:null, kategori:'Bahan Baku', jenis_item:'raw_material', satuan:'kg', harga:0, harga_pokok:12000}.
 5. UBAH PRODUK. Cocokkan produk dengan katalog di konteks berdasarkan nama dan ID. Jika ada beberapa nama yang mirip/duplikat, minta pengguna memilih. Gunakan product_update dengan product_id persis dari konteks, product_name, dan hanya field yang diminta pengguna. Hanya ubah merchandise, finished_good, atau service. Bahan baku/barang dalam proses belum bisa diedit oleh Cashie. Field yang boleh diubah: nama, sku, kategori, jenis_item, satuan, harga, harga_pokok. Jangan mengubah field yang tidak diminta.
 6. HAPUS PRODUK. Cocokkan nama dan ID dari katalog; jika ambigu, minta klarifikasi. Gunakan product_delete dengan product_id dan product_name yang tepat. Penghapusan CAVA adalah NONAKTIFKAN dari katalog aktif; riwayat lama tetap dipertahankan. Aplikasi akan menjelaskan hal ini sebelum konfirmasi.
-7. RESEP PRODUKSI. Gunakan production_recipe_create hanya bila nama resep, produk hasil bertipe finished_good, jumlah hasil per batch, dan minimal satu bahan raw_material/work_in_progress yang melacak stok tersedia di konteks. Setiap bahan harus dipilih dengan ID persis dan jumlahnya. Bila ada ID/bahan tidak ditemukan atau jumlah tidak disebut, tanyakan klarifikasi. Format: {type:'production_recipe_create', name:'Roti Cokelat', output_product_id:'UUID', output_product_name:'Roti Cokelat', output_qty:10, items:[{product_id:'UUID',product_name:'Tepung',qty:1}], note:null}.
-8. SELESAIKAN BATCH PRODUKSI. Gunakan production_batch_complete hanya bila resep aktif ditemukan persis di konteks, nama/ID-nya cocok, dan jumlah batch jelas. Biaya tenaga kerja dan overhead boleh 0 bila pengguna menyebut tanpa biaya tambahan atau memang ingin mencatat 0; selain itu tanyakan bila nilainya belum jelas. Aplikasi akan memperingatkan stok bahan baku berkurang dan stok produk jadi bertambah; RPC memverifikasi ketersediaan stok. Format: {type:'production_batch_complete', recipe_id:'UUID', recipe_name:'Roti Cokelat', batch_count:2, labor_cost:0, overhead_cost:0, note:null}.
+7. RESEP PRODUKSI (FITUR LANJUTAN; jangan menawarkannya atau meminta pemilik membuat resep, cukup bila pemilik sendiri memintanya). Gunakan production_recipe_create hanya bila nama resep, produk hasil bertipe finished_good, jumlah hasil per batch, dan minimal satu bahan raw_material/work_in_progress yang melacak stok tersedia di konteks. Setiap bahan harus dipilih dengan ID persis dan jumlahnya. Bila ada ID/bahan tidak ditemukan atau jumlah tidak disebut, tanyakan klarifikasi. Format: {type:'production_recipe_create', name:'Roti Cokelat', output_product_id:'UUID', output_product_name:'Roti Cokelat', output_qty:10, items:[{product_id:'UUID',product_name:'Tepung',qty:1}], note:null}.
+8. SELESAIKAN BATCH PRODUKSI (FITUR LANJUTAN; hanya bila pemilik memintanya). Gunakan production_batch_complete hanya bila resep aktif ditemukan persis di konteks, nama/ID-nya cocok, dan jumlah batch jelas. Biaya tenaga kerja dan overhead boleh 0 bila pengguna menyebut tanpa biaya tambahan atau memang ingin mencatat 0; selain itu tanyakan bila nilainya belum jelas. Aplikasi akan memperingatkan stok bahan baku berkurang dan stok produk jadi bertambah; RPC memverifikasi ketersediaan stok. Format: {type:'production_batch_complete', recipe_id:'UUID', recipe_name:'Roti Cokelat', batch_count:2, labor_cost:0, overhead_cost:0, note:null}.
 9. PERBARUI PROFIL USAHA. Gunakan profile_update hanya untuk field yang diminta pemilik dan nilai baru dinyatakan jelas. Field yang didukung: nama_usaha, tanggal_mulai_usaha (YYYY-MM-DD), hari_buka_per_bulan (1–31), kebutuhan_modal (rupiah), jenis_usaha (retail/manufaktur/jasa/campuran), bentuk_usaha (perorangan/pt_perorangan/cv/pt/koperasi/lainnya), bidang_usaha, memiliki_persediaan (boolean), metode_pembayaran (gopay_macrodroid/manual). Jangan mengubah field lain. Format: {type:'profile_update', changes:{nama_usaha:'Warung Maju'}}. Jika belum ada profil tersimpan, minta pemilik membuka Profil Usaha dan menyelesaikan pengaturan terlebih dahulu.
 10. CATAT MODAL HARIAN. Jika pemilik ingin mencatat atau mengubah nominal modal yang dialokasikan untuk kegiatan usaha hari ini, gunakan {type:'daily_modal_set',amount:100000,date:'tanggal hari ini dari konteks'}. Ambil tanggal dari konteks dan jangan membuat catatan untuk tanggal lain. Nominal disimpan pada daily_sessions.modal_harian, bukan sebagai transaksi, pendapatan, biaya, atau setoran modal. Nilai ini digunakan dalam perhitungan untung bersih hari ini, tetapi tidak mengubah saldo kas/bank. Wajib minta konfirmasi sebelum menyimpan. Jangan memakai accounting_entry capital untuk alokasi dari uang usaha yang sudah tercatat.
 11. JURNAL MODAL/PEMBAYARAN. Untuk setoran modal gunakan accounting_entry kind capital; pengambilan uang pribadi gunakan draw; pembayaran pemasok supplier_payment; upah tenaga kerja labor_payment; biaya overhead overhead_payment. Harus ada jumlah dan keterangan. payment_account 1000 untuk kas tunai (default), 1010 untuk rekening/bank. Jangan gunakan action ini untuk penjualan atau biaya harian biasa; gunakan transaction. Format: {type:'accounting_entry',kind:'capital',amount:500000,description:'Setoran modal pemilik',payment_account:'1000'}.
@@ -132,7 +133,7 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
       .select('nama_usaha,jenis_usaha,bentuk_usaha,bidang_usaha,tanggal_mulai_usaha,hari_buka_per_bulan,kebutuhan_modal,memiliki_persediaan,metode_pembayaran')
       .eq('user_id', userId).maybeSingle(),
     userClient.from('transactions')
-      .select('id,jenis,keterangan,jumlah,metode,qty,created_at,payment_source,product_id')
+      .select('id,jenis,keterangan,jumlah,metode,qty,created_at,payment_source,product_id,kategori_biaya,produk_terkait,produk_terkait_id')
       .eq('user_id', userId).gte('created_at', startIso).order('created_at', { ascending: false }).limit(500),
     userClient.from('products')
       .select('id,nama,kategori,jenis_item,harga,harga_pokok,sku,satuan,stok,lacak_stok')
@@ -146,7 +147,17 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
     userClient.from('daily_sessions').select('id,tanggal,modal_harian').eq('user_id', userId).eq('tanggal', endDate).maybeSingle(),
   ]);
 
-  if (txResult.error) throw new Error('Data transaksi tidak dapat dibaca. Periksa izin database CAVA.');
+  // Sebelum migration v21/v22 dijalankan kolom kategori biaya/produk belum ada: baca ulang tanpa kolom itu.
+  let txData = txResult.data as unknown[] | null;
+  let txError = txResult.error;
+  if (txError && /kategori_biaya|produk_terkait/i.test(txError.message)) {
+    const dasar = await userClient.from('transactions')
+      .select('id,jenis,keterangan,jumlah,metode,qty,created_at,payment_source,product_id')
+      .eq('user_id', userId).gte('created_at', startIso).order('created_at', { ascending: false }).limit(500);
+    txData = dasar.data as unknown[] | null;
+    txError = dasar.error;
+  }
+  if (txError) throw new Error('Data transaksi tidak dapat dibaca. Periksa izin database CAVA.');
   if (productResult.error) throw new Error('Katalog produk tidak dapat dibaca.');
 
   // Ringkasan halaman Cek Harga / Pembiayaan: hanya bila ditanyakan; kegagalan tidak boleh menggagalkan chat.
@@ -155,9 +166,9 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
     extras.pembiayaan ? ringkasPembiayaan(userClient, userId, (profileResult.data ?? null) as ProfilUsahaDB | null, endDate).catch(() => null) : Promise.resolve(null),
   ]);
 
-  type TransactionRow = { id: string; jenis: string; keterangan: string | null; jumlah: number | string; metode: string | null; qty: number | null; created_at: string; payment_source: string | null; product_id: string | null };
+  type TransactionRow = { id: string; jenis: string; keterangan: string | null; jumlah: number | string; metode: string | null; qty: number | null; created_at: string; payment_source: string | null; product_id: string | null; kategori_biaya?: string | null; produk_terkait?: string | null; produk_terkait_id?: string | null };
   type ProductRow = { id: string; nama: string; kategori: string | null; jenis_item: string; harga: number | string | null; harga_pokok: number | string | null; sku: string | null; satuan: string | null; stok: number | string | null; lacak_stok: boolean };
-  const transactionRows = (txResult.data ?? []) as TransactionRow[];
+  const transactionRows = (txData ?? []) as TransactionRow[];
   const productRows = (productResult.data ?? []) as ProductRow[];
   const recipeRows = (recipesResult.data ?? []) as Array<{ id: string; nama: string; output_product_id: string; output_qty: number | string; output_unit: string | null; catatan: string | null }>;
   const recipeItemResult = recipeRows.length ? await userClient.from('production_recipe_items')
@@ -184,6 +195,12 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
       expensesByName.set(row.keterangan, (expensesByName.get(row.keterangan) ?? 0) + row.jumlah);
     }
   }
+
+  const namaProdukById = new Map(productRows.map((row) => [row.id, row.nama]));
+  const biayaBahanPerProduk = ringkasBiayaPerProduk(transactionRows, namaProdukById)
+    .filter((item) => item.biayaBahanTercatat > 0)
+    .slice(0, 8)
+    .map((item) => ({ produk: item.nama, penjualan: item.penjualan, biayaBahanTercatat: item.biayaBahanTercatat, selisih: item.selisih }));
 
   let profit: number | null = null;
   let accountingNote = 'Laba bersih tidak dihitung dari transaksi saja karena HPP dan jurnal akuntansi perlu diverifikasi.';
@@ -274,6 +291,8 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
     transaksiTerbaru: pickTransactions(limit.transaksi).map((row) => ({
       id: row.id, jenis: row.jenis, keterangan: String(row.keterangan ?? '').slice(0, 100), jumlah: Number(row.jumlah ?? 0),
       tanggal: new Date(row.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }), metode: row.metode,
+      ...(row.jenis === 'biaya' && row.kategori_biaya ? { jenisBiaya: row.kategori_biaya === 'bahan_produksi' ? 'bahan produksi' : 'operasional' } : {}),
+      ...(row.produk_terkait ? { untukProduk: row.produk_terkait } : {}),
     })),
     usaha: {
       nama: profileResult.data?.nama_usaha ?? 'Usaha pengguna',
@@ -294,6 +313,7 @@ async function businessContext(userClient: NonNullable<Awaited<ReturnType<typeof
       labaBersihJurnal: profit,
       catatanLaba: accountingNote,
       produkTerlarisBerdasarkanKuantitas: [...salesByProduct.entries()].map(([nama, value]) => ({ nama, ...value })).sort((a, b) => b.qty - a.qty).slice(0, 5),
+      ...(biayaBahanPerProduk.length ? { biayaBahanPerProduk, catatanBiayaBahan: 'Biaya bahan adalah pembelian bahan yang dicatat untuk produk itu, bukan bahan yang terpakai dan bukan HPP. Selisih = penjualan dikurangi biaya bahan tercatat.' } : {}),
       pengeluaranTerbesar: [...expensesByName.entries()].map(([keterangan, jumlah]) => ({ keterangan, jumlah })).sort((a, b) => b.jumlah - a.jumlah).slice(0, 5),
     },
     katalogProduk: pickByName(products, limit.produk),
@@ -323,7 +343,7 @@ function isProseConfirmation(message: string, reply: string) {
 }
 
 const REVISION_ACTION_FIELDS: Record<string, string[]> = {
-  transaction: ['jenis', 'keterangan', 'jumlah', 'qty', 'metode'],
+  transaction: ['jenis', 'keterangan', 'jumlah', 'qty', 'metode', 'produk_terkait'],
   transaction_delete: ['transaction_id', 'description', 'amount', 'date', 'jenis'],
   opening_balance_setup: ['cash_amount', 'bank_amount'],
   start_daily_session: ['date', 'modal_harian'],
@@ -366,6 +386,10 @@ function sanitizePendingProposal(value: unknown): Array<Record<string, unknown>>
           !(clean.metode === null || clean.metode === 'tunai' || clean.metode === 'qris')) return null;
       clean.jumlah = jumlah;
       clean.qty = qty;
+      if (clean.produk_terkait !== undefined) {
+        if (clean.jenis === 'biaya' && typeof clean.produk_terkait === 'string' && clean.produk_terkait.trim()) clean.produk_terkait = clean.produk_terkait.trim().slice(0, 100);
+        else delete clean.produk_terkait;
+      }
     }
     proposal.push(clean);
   }
