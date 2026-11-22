@@ -21,6 +21,7 @@ import { Press, Rise } from '@/components/Motion';
 import { bukaCatatTransaksi, TRANSACTION_SAVED_EVENT, ensureTodaySession, type QuickSavedDetail } from '@/lib/quickSession';
 import { announceInvoiceMatch, getActiveInvoice, publishActiveInvoice } from '@/lib/qrisBridge';
 import { CavaLogo } from '@/components/CavaLogo';
+import { klasifikasiBiaya, kolomKategoriBelumAda } from '@/lib/biayaBahan';
 
 type Sesi = { id: string; modal_harian: number };
 type SaldoUsaha = { kas: number; bank: number };
@@ -420,8 +421,12 @@ export default function Kasir() {
       info(`✅ ${row.keterangan} tercatat`);
       return;
     }
-    const { data, error } = await supabase.from('transactions').insert({ ...row, session_id: sesiAktif.id, qty: 1 }).select('*').single();
-    if (error) return setErr(error.message);
+    const dasar = { ...row, session_id: sesiAktif.id, qty: 1 };
+    const kategori = row.jenis === 'biaya' ? klasifikasiBiaya(row.keterangan) : null;
+    const simpan = (payload: Record<string, unknown>) => supabase.from('transactions').insert(payload).select('*').single();
+    let { data, error } = await simpan(kategori ? { ...dasar, kategori_biaya: kategori } : dasar);
+    if (error && kolomKategoriBelumAda(error.message)) ({ data, error } = await simpan(dasar));
+    if (error || !data) return setErr(error?.message ?? 'Transaksi belum berhasil disimpan.');
     setTxs((t) => (t.some((x) => x.id === data.id) ? t : [...t, keTx(data)]));
     await refreshSaldo();
     kaChing();

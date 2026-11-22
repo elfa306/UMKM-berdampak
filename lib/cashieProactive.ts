@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { supabase } from './supabase';
 import { rupiah, todayISO } from './accounting';
 import { TRANSACTION_SAVED_EVENT, type QuickSavedDetail } from './quickSession';
+import { klasifikasiBiaya } from './biayaBahan';
 import { completeBuyPlans, duePlansFor, markPlanAsked, type DuePlan } from './cashieMemory';
 import { PROFILE_HOURS_EVENT, formatJam, isValidJam, jamKeMenit, menitKeJam } from './jamOperasional';
 
@@ -79,7 +80,8 @@ export type ProactiveSnapshot = {
 export type ProactiveAction = 'record_sale' | 'record_expense' | 'open_report' | 'open_settings';
 export type ProactiveIntent =
   | { type: 'ask_hours'; suggestion: { buka: string; tutup: string } | null }
-  | { type: 'plan_followup'; planId: string };
+  | { type: 'plan_followup'; planId: string }
+  | { type: 'classify_expense'; transactionId: string };
 export type ProactiveMessage = { id: string; text: string; actions: ProactiveAction[]; intent?: ProactiveIntent };
 type Candidate = ProactiveMessage & { cooldownDays: number };
 
@@ -477,7 +479,8 @@ export function reactiveCandidates(s: ProactiveSnapshot, rows: QuickSavedDetail[
   const sold = rows.filter((row) => row.jenis === 'penjualan');
   const spent = rows.filter((row) => row.jenis === 'biaya');
 
-  const bigExpense = spent.find((row) => Number(row.jumlah) >= 100_000);
+  // Hanya bertanya bila jenis biayanya memang belum jelas dari keterangan.
+  const bigExpense = spent.find((row) => Number(row.jumlah) >= 100_000 && klasifikasiBiaya(row.keterangan) === null);
   if (bigExpense) {
     const amount = Number(bigExpense.jumlah);
     list.push({
@@ -485,6 +488,7 @@ export function reactiveCandidates(s: ProactiveSnapshot, rows: QuickSavedDetail[
       text: `Pengeluaran ${bigExpense.keterangan.trim()} ${rupiah(amount)} tadi untuk bahan produksi atau kebutuhan operasional?`,
       cooldownDays: 2,
       actions: [],
+      intent: { type: 'classify_expense', transactionId: bigExpense.id },
     });
   }
   if (sold.length && s.yesterdaySales.total > 0 && s.todaySales.total > s.yesterdaySales.total) {

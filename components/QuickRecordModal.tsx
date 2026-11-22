@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { rupiah, todayISO } from '@/lib/accounting';
 import { kaChing } from '@/lib/sound';
 import { ensureTodaySession, type QuickSavedDetail } from '@/lib/quickSession';
+import { kategoriDariPilihan, kolomKategoriBelumAda } from '@/lib/biayaBahan';
 import CavaLogo from './CavaLogo';
 import QrisCashier from './QrisCashier';
 import Modal from './Modal';
@@ -128,19 +129,19 @@ export default function QuickRecordModal({
         return;
       }
 
-      const { data, error } = await supabase
-        .from('transactions')
-        .insert({
-          session_id: sessionId,
-          user_id: user.id,
-          jenis,
-          keterangan: note,
-          jumlah: nominalNumber,
-          qty: 1,
-          metode: metodeTx,
-        })
-        .select('*')
-        .single();
+      const baris = {
+        session_id: sessionId,
+        user_id: user.id,
+        jenis,
+        keterangan: note,
+        jumlah: nominalNumber,
+        qty: 1,
+        metode: metodeTx,
+      };
+      const simpan = (payload: Record<string, unknown>) => supabase.from('transactions').insert(payload).select('*').single();
+      let { data, error } = await simpan(jenis === 'biaya' ? { ...baris, kategori_biaya: kategoriDariPilihan(kategoriBiaya, note) } : baris);
+      // Sebelum migration v21 dijalankan, simpan tanpa kategori agar pencatatan tetap berjalan.
+      if (error && kolomKategoriBelumAda(error.message)) ({ data, error } = await simpan(baris));
 
       if (error || !data) {
         setLoading(false);

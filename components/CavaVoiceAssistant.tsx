@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
 import { todayISO, rupiah } from '@/lib/accounting';
 import { recordProactiveDismissed, useCashieProactive, type ProactiveAction, type ProactiveMessage } from '@/lib/cashieProactive';
+import { jawabanKategori, kolomKategoriBelumAda, tandaiBiaya } from '@/lib/biayaBahan';
 import { captureUserPlan, currentMemoryUserId, planReply, setPlanStatus } from '@/lib/cashieMemory';
 import { formatJam, parseOperatingHours, saveOperatingHours, type JamOperasional } from '@/lib/jamOperasional';
 
@@ -49,6 +50,7 @@ type CardActions = { id: string; actions: ProactiveAction[] };
 type HoursProposal = { buka: string; tutup: string };
 type HoursAwait = { until: number; partial: JamOperasional };
 type PlanAwait = { until: number; planId: string };
+type ClassifyAwait = { until: number; transactionId: string };
 type Props = { variant?: 'mobile' | 'desktop' | 'global'; controlsVisible?: boolean; onManualRecord: (mode?: 'masuk' | 'keluar' | 'modal') => void };
 
 const MAX_RECORDING_MS = 35_000;
@@ -292,6 +294,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const hoursAwaitRef = useRef<HoursAwait | null>(null);
   const proactiveIdRef = useRef<string | null>(null);
   const planAwaitRef = useRef<PlanAwait | null>(null);
+  const classifyAwaitRef = useRef<ClassifyAwait | null>(null);
   const historyRef = useRef<Message[]>([]);
   const pendingRef = useRef<PendingAction[]>([]);
   const pendingTokenRef = useRef<string | null>(null);
@@ -616,7 +619,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         qty: item.qty,
         metode: item.metode,
       }));
-      const { data, error: insertError } = await supabase.from('transactions').insert(payload).select('*');
+      // Biaya bahan dibedakan dari biaya operasional; sebelum migration v21 dijalankan, simpan tanpa kategori.
+      let { data, error: insertError } = await supabase.from('transactions').insert(tandaiBiaya(payload)).select('*');
+      if (insertError && kolomKategoriBelumAda(insertError.message)) ({ data, error: insertError } = await supabase.from('transactions').insert(payload).select('*'));
       if (insertError || !data) throw new Error(insertError?.message || 'Transaksi belum berhasil disimpan.');
 
       const rows = (data as QuickSavedRow[]).map((row) => ({ ...row, jumlah: Number(row.jumlah) }));
@@ -1080,6 +1085,28 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       setPhase('idle');
       return;
     }
+    const classify = classifyAwaitRef.current && classifyAwaitRef.current.until > Date.now() ? classifyAwaitRef.current : null;
+    const category = classify ? jawabanKategori(text) : null;
+    if (classify && category) {
+      classifyAwaitRef.current = null;
+      const { error } = await supabase.rpc('set_transaction_expense_category', {
+        p_transaction_id: classify.transactionId,
+        p_kategori: category.kategori,
+        p_produk: category.produk,
+      });
+      if (error) {
+        sayAnswer(/set_transaction_expense_category|function/i.test(error.message)
+          ? 'Pengelompokan biaya belum aktif di database. Jalankan supabase/migration_v21_biaya_bahan_produksi.sql dulu ya.'
+          : 'Maaf, kategori biayanya belum berhasil disimpan. Coba lagi sebentar lagi.', 'error');
+      } else {
+        announceTransactionSaved();
+        sayAnswer(category.kategori === 'bahan_produksi'
+          ? `Siap, saya catat sebagai biaya bahan produksi${category.produk ? ` untuk ${category.produk}` : ''}.`
+          : 'Siap, saya catat sebagai biaya operasional.');
+      }
+      setPhase('idle');
+      return;
+    }
     const followUp = planAwaitRef.current && planAwaitRef.current.until > Date.now() ? planAwaitRef.current : null;
     const reply = followUp ? planReply(text) : null;
     if (followUp && reply) {
@@ -1403,6 +1430,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     proactiveIdRef.current = id;
     if (id && message.actions.length) setCardActions({ id, actions: message.actions });
     historyRef.current = [...historyRef.current, { id: crypto.randomUUID(), role: 'assistant' as const, content: message.text }].slice(-12);
+    if (message.intent?.type === 'classify_expense') classifyAwaitRef.current = { until: Date.now() + HOURS_AWAIT_MS, transactionId: message.intent.transactionId };
     if (message.intent?.type === 'plan_followup') planAwaitRef.current = { until: Date.now() + HOURS_AWAIT_MS, planId: message.intent.planId };
     if (askHours) {
       hoursAwaitRef.current = {
