@@ -31,6 +31,8 @@ const DAY_MS = 86_400_000;
 
 const FUTURE = /\b(besok|lusa|nanti|minggu depan|rencananya|berencana|mau|ingin|pengen|akan|harus)\b/;
 const PAST = /\b(tadi|kemarin|barusan|baru saja|sudah|telah)\b/;
+const COMMAND = /\b(catat|catatkan|tolong|bantu|buka|bukakan|lihat|tampilkan|hapus|ubah|simpan|tambahkan|unduh|ekspor)\b/;
+const STRONG_FUTURE = /\b(besok|lusa|nanti|minggu depan|rencananya|berencana)\b/;
 const AMOUNT = /\b(ribu|rb|juta|jt|rp|rupiah)\b|\d{4,}/;
 
 const dayDiff = (later: string, earlier: string) =>
@@ -56,15 +58,15 @@ function detectKind(text: string): PlanKind | null {
  * Mengenali rencana ke depan dari ucapan pemilik. Sengaja konservatif: kalimat transaksi
  * (ada nominal) atau yang sudah lewat ("tadi beli bahan") tidak dianggap rencana.
  */
-export function extractPlan(raw: string, today: string): Pick<Plan, 'kind' | 'dueDay'> | null {
+export function extractPlan(raw: string, today: string): (Pick<Plan, 'kind' | 'dueDay'> & { strong: boolean }) | null {
   const text = normalize(raw);
   const words = text.split(' ').filter(Boolean);
   if (words.length < 3 || words.length > 25) return null;
-  if (!FUTURE.test(text) || PAST.test(text) || AMOUNT.test(text)) return null;
+  if (!FUTURE.test(text) || PAST.test(text) || AMOUNT.test(text) || COMMAND.test(text)) return null;
   const kind = detectKind(text);
   if (!kind) return null;
   const offset = /\blusa\b/.test(text) ? 2 : /\bminggu depan\b/.test(text) ? 7 : 1;
-  return { kind, dueDay: addDays(today, offset) };
+  return { kind, dueDay: addDays(today, offset), strong: STRONG_FUTURE.test(text) };
 }
 
 function read(userId: string): Plan[] {
@@ -90,13 +92,13 @@ export async function currentMemoryUserId(): Promise<string | null> {
 }
 
 /** Dipanggil untuk setiap ucapan pemilik; menyimpan rencana bila ada, tidak pernah mengganggu alur utama. */
-export async function captureUserPlan(raw: string, today: string): Promise<boolean> {
-  if (typeof window === 'undefined') return false;
+export async function captureUserPlan(raw: string, today: string): Promise<PlanKind | null> {
+  if (typeof window === 'undefined') return null;
   try {
     const found = extractPlan(raw, today);
-    if (!found) return false;
+    if (!found) return null;
     const userId = await currentMemoryUserId();
-    if (!userId) return false;
+    if (!userId) return null;
     const plans = prune(read(userId), today);
     const existing = plans.find((plan) => plan.kind === found.kind && plan.status === 'open');
     if (existing) {
@@ -107,9 +109,20 @@ export async function captureUserPlan(raw: string, today: string): Promise<boole
       plans.push({ id: `${found.kind}-${Date.now().toString(36)}`, kind: found.kind, createdDay: today, dueDay: found.dueDay, status: 'open', asked: 0, lastAskedDay: null });
     }
     write(userId, plans);
-    return true;
+    // Hanya rencana dengan penanda waktu jelas yang menggantikan AI; yang samar tetap diingat tetapi diteruskan ke AI.
+    return found.strong ? found.kind : null;
   } catch {
-    return false;
+    return null;
+  }
+}
+
+/** Balasan hangat saat Cashie mencatat rencana pemilik; tidak membuka form apa pun. */
+export function planAcknowledgement(kind: PlanKind): string {
+  switch (kind) {
+    case 'beli_bahan': return 'Siap, saya ingat rencanamu beli bahan. Nanti saya tanyakan lagi, dan setelah belanja ceritakan saja ya, saya bantu catat.';
+    case 'produksi': return 'Oke, saya ingat rencana produksimu. Nanti saya tanyakan hasilnya ya.';
+    case 'harga': return 'Baik, saya ingat rencana mengevaluasi harga jual. Nanti kita bahas bareng ya.';
+    case 'varian': return 'Seru! Saya ingat rencana varian barumu. Nanti saya tanya perkembangannya ya.';
   }
 }
 

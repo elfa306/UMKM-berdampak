@@ -11,7 +11,8 @@ import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from
 import { todayISO, rupiah } from '@/lib/accounting';
 import { recordProactiveDismissed, useCashieProactive, type ProactiveAction, type ProactiveMessage } from '@/lib/cashieProactive';
 import { jawabanKategori, kolomKategoriBelumAda, tandaiBiaya } from '@/lib/biayaBahan';
-import { captureUserPlan, currentMemoryUserId, planReply, setPlanStatus } from '@/lib/cashieMemory';
+import { matchLocalExport } from '@/lib/cashieIntents';
+import { captureUserPlan, currentMemoryUserId, planAcknowledgement, planReply, setPlanStatus } from '@/lib/cashieMemory';
 import { formatJam, parseOperatingHours, saveOperatingHours, type JamOperasional } from '@/lib/jamOperasional';
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'thinking';
@@ -106,6 +107,7 @@ function matchLocalNavigation(raw: string): { path: string; label: string } | nu
   const matches = NAV_ROUTES.filter((route) => route.pattern.test(text));
   return matches.length === 1 ? { path: matches[0].path, label: matches[0].label } : null;
 }
+
 
 function confirmationChoice(raw: string): 'yes' | 'no' | 'unclear' {
   const normalized = raw.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
@@ -822,6 +824,14 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         return;
       }
 
+      const localExport = matchLocalExport(message, todayISO());
+      if (localExport) {
+        setPendingItems([]);
+        if (localExport.openReport) router.push('/laporan');
+        await downloadAccountingReport(localExport.month);
+        return;
+      }
+
       const token = await getAccessToken();
       if (turnId !== activeTurnRef.current) return;
       const result = await fetch('/api/ai/chat', {
@@ -839,8 +849,20 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       const provider: Message['provider'] = body.provider === 'openrouter' ? 'openrouter' : body.provider === 'gemini' ? 'gemini' : 'groq';
       const rawActions = Array.isArray(body.actions) ? body.actions as Array<Record<string, unknown>> : [];
       const nonTransactionActions = rawActions.filter((item) => item?.type !== 'transaction');
-      if (nonTransactionActions.length > 1 || (nonTransactionActions.length === 1 && rawActions.length > 1)) {
+      const isOpenAndExport = rawActions.length === 2
+        && rawActions.some((item) => item?.type === 'navigate' && item.path === '/laporan')
+        && rawActions.some((item) => item?.type === 'accounting_report_export');
+      if (!isOpenAndExport && (nonTransactionActions.length > 1 || (nonTransactionActions.length === 1 && rawActions.length > 1))) {
         throw new Error('Satu perintah hanya boleh menjalankan satu tindakan. Coba pisahkan permintaannya.');
+      }
+      if (isOpenAndExport) {
+        const exportAction = rawActions.find((item) => item?.type === 'accounting_report_export');
+        if (typeof exportAction?.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(exportAction.month)) {
+          setPendingItems([]);
+          router.push('/laporan');
+          await downloadAccountingReport(exportAction.month);
+          return;
+        }
       }
       const allowedPaths = new Set(['/kasir', '/laporan', '/pembiayaan', '/inventaris', '/harga', '/lainnya', '/pengaturan-usaha', '/integrasi', '/riwayat', '/statistik', '/kredit', '/rekomendasi', '/demo', '/demo/akuntansi', '/demo/analisis', '/demo/inventaris', '/demo/kasir', '/demo/persiapan', '/demo/produksi', '/demo/ruang']);
       const navigateAction = rawActions.find((item) => item?.type === 'navigate' && typeof item.path === 'string' && allowedPaths.has(item.path));
@@ -1159,7 +1181,14 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       return;
     }
     // Rencana yang disebut pemilik ("besok mau beli bahan") diingat untuk ditindaklanjuti, tanpa menghentikan percakapan.
-    void captureUserPlan(text, todayISO());
+    // Bila ucapan murni rencana, Cashie cukup menanggapi sebagai teman: tidak membuka form dan tidak memanggil AI.
+    const planKind = await captureUserPlan(text, todayISO());
+    if (planKind) {
+      historyRef.current = [...historyRef.current, { id: crypto.randomUUID(), role: 'user', content: text } as Message].slice(-12);
+      sayAnswer(planAcknowledgement(planKind), 'answer');
+      setPhase('idle');
+      return;
+    }
     await sendMessage(text);
   }, [handleConfirmation, handleHoursSpeech, revisePendingAction, sayAnswer, sendMessage]);
 
