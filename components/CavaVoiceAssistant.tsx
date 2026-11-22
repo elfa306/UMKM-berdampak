@@ -557,7 +557,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     setSpeechProgress(null);
   }, [scheduleResponseDismiss]);
 
-  const speakText = useCallback(async (id: string, text: string) => {
+  const speakText = useCallback(async (id: string, text: string, onAudioReady?: () => void, onAudioFailure?: () => void) => {
     if (!text.trim() || !voiceEnabledRef.current) return;
     unlockAudio();
     stopCurrentSpeech();
@@ -582,6 +582,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       const startedAt = context.currentTime;
       audioSourceRef.current = source;
       setLoadingSpeech(false);
+      // Kartu proaktif baru ditampilkan setelah audio berhasil dibuat, didekode, dan siap diputar.
+      onAudioReady?.();
       setSpeaking(true);
 
       source.onended = () => {
@@ -678,6 +680,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
         setTypeId(currentCard.id);
         console.warn('[CAVA] Suara tidak tersedia:', message);
         if (!stickyResponseRef.current) scheduleResponseDismiss(currentCard, 8_000);
+      } else if (onAudioFailure) {
+        // Audio gagal: tampilkan isi pesan sebagai teks, bukan animasi suara kosong.
+        onAudioFailure();
       } else {
         showResponse(message, 'error', true);
       }
@@ -1614,7 +1619,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       unlockAudio(); // harus dipanggil di dalam sentuhan itu sendiri
       window.setTimeout(() => {
         if (!canProactiveInterrupt() || document.querySelector('[aria-modal="true"]')) return;
-        presentProactive(message, true);
+        void speakText(crypto.randomUUID(), message.text, () => presentProactive(message, false), () => presentProactive(message, false));
       }, 450);
     }
     for (const name of events) window.addEventListener(name, onGesture, true);
@@ -1626,11 +1631,19 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     if (!voiceEnabledRef.current) { presentProactive(message, false); return; }
     unlockAudio();
     void waitForAudioRunning(700).then((running) => {
-      if (running) presentProactive(message, true);
-      else if (message.greeting) deferGreetingUntilGesture(message);
+      if (running) {
+        // Jangan munculkan kartu, teks, atau animasi berpikir selama audio masih dibuat.
+        // Kartu baru muncul dari onAudioReady tepat sebelum pemutaran dimulai.
+        void speakText(
+          crypto.randomUUID(),
+          message.text,
+          () => presentProactive(message, false),
+          () => presentProactive(message, false),
+        );
+      } else if (message.greeting) deferGreetingUntilGesture(message);
       else presentProactive(message, false);
     });
-  }, [deferGreetingUntilGesture, presentProactive, unlockAudio, waitForAudioRunning]);
+  }, [deferGreetingUntilGesture, presentProactive, speakText, unlockAudio, waitForAudioRunning]);
 
   const runCardAction = useCallback((action: ProactiveAction) => {
     stopCurrentSpeech();
