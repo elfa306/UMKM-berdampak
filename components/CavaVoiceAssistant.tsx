@@ -9,6 +9,8 @@ import { CavaVMark } from './CavaLogo';
 import { supabase } from '@/lib/supabase';
 import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
 import { todayISO, rupiah } from '@/lib/accounting';
+import { recordProactiveDismissed, useCashieProactive, type ProactiveAction, type ProactiveMessage } from '@/lib/cashieProactive';
+import { formatJam, parseOperatingHours, saveOperatingHours, type JamOperasional } from '@/lib/jamOperasional';
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'thinking';
 type Message = { id: string; role: 'user' | 'assistant'; content: string; provider?: 'groq' | 'gemini' | 'openrouter' };
@@ -42,9 +44,21 @@ type SpeechAlignment = {
 type SpeechCue = { display: string; start: number; end: number };
 type CachedSpeech = { buffer: AudioBuffer; cues: SpeechCue[] };
 type SpeechProgress = { text: string; visibleCount: number; activeIndex: number };
+type CardActions = { id: string; actions: ProactiveAction[] };
+type HoursProposal = { buka: string; tutup: string };
+type HoursAwait = { until: number; partial: JamOperasional };
 type Props = { variant?: 'mobile' | 'desktop' | 'global'; controlsVisible?: boolean; onManualRecord: (mode?: 'masuk' | 'keluar' | 'modal') => void };
 
 const MAX_RECORDING_MS = 35_000;
+const HOURS_AWAIT_MS = 15 * 60_000;
+const PROACTIVE_CARD_MS = 22_000;
+const CARD_ACTION_LABEL: Record<ProactiveAction, string> = {
+  record_sale: 'Catat penjualan',
+  record_expense: 'Catat pengeluaran',
+  open_report: 'Lihat laporan',
+  open_settings: 'Buka Pengaturan Usaha',
+};
+const TRANSACTION_WORDS = /\b(catat|beli|membeli|belanja|jual|terjual|bayar|rupiah|ribu|juta|rp)\b/;
 const WAVEFORM_BAR_COUNT = 32;
 const EMPTY_WAVEFORM = Array.from({ length: WAVEFORM_BAR_COUNT }, () => 0.06);
 
@@ -268,8 +282,13 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const [speechProgress, setSpeechProgress] = useState<SpeechProgress | null>(null);
   const [micLevels, setMicLevels] = useState<number[]>(EMPTY_WAVEFORM);
   const [userSaid, setUserSaid] = useState<string | null>(null);
+  const [cardActions, setCardActions] = useState<CardActions | null>(null);
+  const [hoursProposal, setHoursProposal] = useState<HoursProposal | null>(null);
 
-  const greetingShownRef = useRef(false);
+  const phaseRef = useRef<Phase>('idle');
+  const hoursProposalRef = useRef<HoursProposal | null>(null);
+  const hoursAwaitRef = useRef<HoursAwait | null>(null);
+  const proactiveIdRef = useRef<string | null>(null);
   const historyRef = useRef<Message[]>([]);
   const pendingRef = useRef<PendingAction[]>([]);
   const pendingTokenRef = useRef<string | null>(null);
@@ -315,6 +334,11 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     setPending(items);
   }, []);
 
+  const setHoursProposalState = useCallback((value: HoursProposal | null) => {
+    hoursProposalRef.current = value;
+    setHoursProposal(value);
+  }, []);
+
   const scheduleResponseDismiss = useCallback((card: ResponseCard, delay: number) => {
     if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
     responseTimerRef.current = setTimeout(() => {
@@ -334,13 +358,13 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     setResponse(null);
   }, []);
 
-  const showResponse = useCallback((text: string, kind: ResponseKind, sticky = false) => {
+  const showResponse = useCallback((text: string, kind: ResponseKind, sticky = false, delay = 11_000) => {
     if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
     const next: ResponseCard = { id: crypto.randomUUID(), text, kind };
     responseRef.current = next;
     stickyResponseRef.current = sticky;
     setResponse(next);
-    if (!sticky) scheduleResponseDismiss(next, 11_000);
+    if (!sticky) scheduleResponseDismiss(next, delay);
   }, [scheduleResponseDismiss]);
 
   const stopTracks = useCallback(() => {
@@ -959,6 +983,86 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     }
   }, [clearResponse, getAccessToken, setPendingItems, showResponse, speakText, stopCurrentSpeech]);
 
+  const sayAnswer = useCallback((text: string, kind: ResponseKind = 'answer', sticky = false) => {
+    const message: Message = { id: crypto.randomUUID(), role: 'assistant', content: text };
+    historyRef.current = [...historyRef.current, message].slice(-12);
+    showResponse(text, kind, sticky);
+    if (voiceEnabledRef.current) void speakText(message.id, text);
+  }, [showResponse, speakText]);
+
+  const confirmHours = useCallback(async () => {
+    const proposal = hoursProposalRef.current;
+    if (!proposal || savingRef.current) return;
+    savingRef.current = true;
+    setBusySaving(true);
+    try {
+      const result = await saveOperatingHours(proposal.buka, proposal.tutup);
+      if (result.ok) {
+        setHoursProposalState(null);
+        hoursAwaitRef.current = null;
+        sayAnswer(`Siap, jam usahamu sudah saya catat: buka jam ${formatJam(proposal.buka)}, tutup jam ${formatJam(proposal.tutup)}. Saya akan menemani sesuai jam itu.`, 'success');
+      } else {
+        sayAnswer(result.message, 'error', true);
+      }
+    } finally {
+      savingRef.current = false;
+      setBusySaving(false);
+    }
+  }, [sayAnswer, setHoursProposalState]);
+
+  const rejectHours = useCallback(() => {
+    setHoursProposalState(null);
+    hoursAwaitRef.current = { until: Date.now() + HOURS_AWAIT_MS, partial: { buka: null, tutup: null } };
+    sayAnswer('Baik. Tahan tombol V lalu sebutkan jam buka dan jam tutup yang benar, atau atur langsung di Pengaturan Usaha.');
+    const id = responseRef.current?.id;
+    if (id) setCardActions({ id, actions: ['open_settings'] });
+  }, [sayAnswer, setHoursProposalState]);
+
+  /** Jawaban lisan tentang jam usaha ("buka jam 8 pagi, tutup jam 5 sore"). Mengembalikan true bila sudah ditangani. */
+  const handleHoursSpeech = useCallback(async (raw: string): Promise<boolean> => {
+    const text = raw.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!text || TRANSACTION_WORDS.test(text)) return false;
+    const proposal = hoursProposalRef.current;
+    const awaiting = hoursAwaitRef.current && hoursAwaitRef.current.until > Date.now() ? hoursAwaitRef.current : null;
+    const mentionsHours = /\b(buka|tutup|operasional)/.test(text) && /\b(jam|pukul)\b/.test(text);
+    if (!proposal && !awaiting && !mentionsHours) return false;
+
+    if (proposal) {
+      const choice = confirmationChoice(raw);
+      if (choice === 'yes') { await confirmHours(); return true; }
+      if (choice === 'no') { rejectHours(); return true; }
+    }
+
+    const partial = awaiting?.partial ?? { buka: null, tutup: null };
+    let candidate = text;
+    if (!/\b(buka|mulai|tutup|selesai|closing|open)\b/.test(text)) {
+      if (partial.buka && !partial.tutup) candidate = `tutup ${text}`;
+      else if (partial.tutup && !partial.buka) candidate = `buka ${text}`;
+    }
+    const parsed = parseOperatingHours(candidate);
+    if (!parsed) {
+      if (awaiting && confirmationChoice(raw) === 'no' && text.split(' ').length <= 4) {
+        hoursAwaitRef.current = null;
+        sayAnswer('Baik, tidak apa-apa. Kamu bisa mengatur jam usaha kapan saja di Pengaturan Usaha.');
+        return true;
+      }
+      return false;
+    }
+
+    const buka = parsed.buka ?? partial.buka;
+    const tutup = parsed.tutup ?? partial.tutup;
+    hoursAwaitRef.current = { until: Date.now() + HOURS_AWAIT_MS, partial: { buka, tutup } };
+    if (buka && tutup) {
+      setHoursProposalState({ buka, tutup });
+      sayAnswer(`Saya catat usahamu buka jam ${formatJam(buka)} dan tutup jam ${formatJam(tutup)}. Sudah benar?`, 'confirm', true);
+    } else if (buka) {
+      sayAnswer(`Oke, buka jam ${formatJam(buka)}. Lalu tutupnya jam berapa?`);
+    } else if (tutup) {
+      sayAnswer(`Oke, tutup jam ${formatJam(tutup)}. Lalu bukanya jam berapa?`);
+    }
+    return true;
+  }, [confirmHours, rejectHours, sayAnswer, setHoursProposalState]);
+
   const handleRecognizedText = useCallback(async (text: string) => {
     if (pendingRef.current.length) {
       const choice = confirmationChoice(text);
@@ -969,8 +1073,12 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       }
       return;
     }
+    if (await handleHoursSpeech(text)) {
+      setPhase('idle');
+      return;
+    }
     await sendMessage(text);
-  }, [handleConfirmation, revisePendingAction, sendMessage]);
+  }, [handleConfirmation, handleHoursSpeech, revisePendingAction, sendMessage]);
 
   const processAudio = useCallback(async (blob: Blob, mime: string) => {
     const turnId = ++activeTurnRef.current;
@@ -1097,6 +1205,11 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
   const cancelCurrentTurn = useCallback(() => {
     // A database write already in progress cannot be rolled back by dismissing the card.
     if (savingRef.current) return;
+    // Menutup kartu proaktif dihitung sebagai "jangan ganggu dulu": dua kali, Cashie diam sepanjang hari.
+    if (proactiveIdRef.current && responseRef.current?.id === proactiveIdRef.current) recordProactiveDismissed();
+    proactiveIdRef.current = null;
+    hoursAwaitRef.current = null;
+    setHoursProposalState(null);
     activeTurnRef.current += 1;
     cancelledRef.current = true;
     pressedRef.current = false;
@@ -1127,7 +1240,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     clearResponse();
     setUserSaid(null);
     setPhase('idle');
-  }, [clearResponse, setPendingItems, stopCurrentSpeech, stopMicVisualizer, stopTimers, stopTracks]);
+  }, [clearResponse, setHoursProposalState, setPendingItems, stopCurrentSpeech, stopMicVisualizer, stopTimers, stopTracks]);
 
   const startPressGesture = useCallback(() => {
     if (gestureTimerRef.current || pointerActiveRef.current && voiceGestureStartedRef.current) return;
@@ -1242,46 +1355,61 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     else if (response) void speakText(response.id, response.text);
   };
 
-  // Cashie menyapa sekali sehari saat pengguna pertama kali membuka area usaha.
-  // Sapaan tidak memotong aktivitas yang sedang berlangsung atau pesan lain.
-  useEffect(() => {
-    if (variant !== 'global' || !controlsVisible || greetingShownRef.current) return;
-    if (typeof window === 'undefined') return;
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
 
-    const greetingKey = `cava:cashie-greeting:${todayISO()}`;
-    try {
-      if (window.localStorage.getItem(greetingKey) === '1') {
-        greetingShownRef.current = true;
-        return;
-      }
-    } catch {
-      // Penyimpanan lokal yang diblokir tidak boleh mengganggu asisten.
+  // Cashie hanya bicara saat benar-benar sedang diam: tidak merekam, tidak berpikir, tidak ada kartu atau konfirmasi terbuka.
+  const canProactiveInterrupt = useCallback(() => (
+    phaseRef.current === 'idle'
+    && !responseRef.current
+    && !pendingRef.current.length
+    && !hoursProposalRef.current
+    && !busySendingRef.current
+    && !savingRef.current
+    && !activeSpeechTextRef.current
+    && !pressedRef.current
+    && !pointerActiveRef.current
+  ), []);
+
+  const deliverProactive = useCallback((message: ProactiveMessage) => {
+    const askHours = message.intent?.type === 'ask_hours' ? message.intent : null;
+    const suggestion = askHours?.suggestion ?? null;
+    // Kartu "benar begitu?" tetap tampil sampai dijawab, supaya tombol Ya tidak hilang sendiri.
+    if (suggestion) {
+      setHoursProposalState({ buka: suggestion.buka, tutup: suggestion.tutup });
+      showResponse(message.text, 'confirm', true);
+    } else {
+      showResponse(message.text, 'answer', false, PROACTIVE_CARD_MS);
     }
+    const id = responseRef.current?.id ?? null;
+    proactiveIdRef.current = id;
+    if (id && message.actions.length) setCardActions({ id, actions: message.actions });
+    historyRef.current = [...historyRef.current, { id: crypto.randomUUID(), role: 'assistant' as const, content: message.text }].slice(-12);
+    if (askHours) {
+      hoursAwaitRef.current = {
+        until: Date.now() + HOURS_AWAIT_MS,
+        partial: { buka: suggestion?.buka ?? null, tutup: suggestion?.tutup ?? null },
+      };
+    }
+    // Browser memblokir suara sebelum ada interaksi; saat itu teks saja yang tampil.
+    if (voiceEnabledRef.current && audioContextRef.current?.state === 'running') {
+      void speakText(id ?? crypto.randomUUID(), message.text);
+    }
+  }, [setHoursProposalState, showResponse, speakText]);
 
-    const timer = window.setTimeout(() => {
-      if (phase !== 'idle' || responseRef.current || pendingRef.current.length) return;
+  const runCardAction = useCallback((action: ProactiveAction) => {
+    stopCurrentSpeech();
+    clearResponse();
+    if (action === 'record_sale') onManualRecord('masuk');
+    else if (action === 'record_expense') onManualRecord('keluar');
+    else if (action === 'open_report') router.push('/laporan');
+    else router.push('/pengaturan-usaha');
+  }, [clearResponse, onManualRecord, router, stopCurrentSpeech]);
 
-      greetingShownRef.current = true;
-      try { window.localStorage.setItem(greetingKey, '1'); } catch {
-        // Sapaan tetap dapat tampil walau penyimpanan lokal tidak tersedia.
-      }
-
-      const hour = Number(new Intl.DateTimeFormat('en-GB', {
-        hour: '2-digit',
-        hour12: false,
-        timeZone: 'Asia/Jakarta',
-      }).format(new Date()));
-      const timeGreeting = hour < 11 ? 'selamat pagi'
-        : hour < 15 ? 'selamat siang'
-        : hour < 18 ? 'selamat sore' : 'selamat malam';
-      const greeting = `Halo, ${timeGreeting}! Ada yang ingin kamu siapkan untuk usaha hari ini?`;
-      const greetingId = crypto.randomUUID();
-      showResponse(greeting, 'answer');
-      if (voiceEnabledRef.current) void speakText(greetingId, greeting);
-    }, 1400);
-
-    return () => window.clearTimeout(timer);
-  }, [controlsVisible, phase, response, pending.length, showResponse, speakText, variant]);
+  useCashieProactive({
+    enabled: variant === 'global' && controlsVisible,
+    canInterrupt: canProactiveInterrupt,
+    deliver: deliverProactive,
+  });
 
   useEffect(() => () => {
     speechRequestRef.current += 1;
@@ -1420,6 +1548,23 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
                     {busySaving ? <LoaderCircle size={12} className="animate-spin"/> : <Check size={12}/>} {pending.every((item) => item.type === 'transaction') ? 'Ya, catat' : 'Ya, lanjutkan'}
                   </button>
                   <button type="button" onClick={cancelPending} disabled={busySaving} className="rounded-lg border border-[#D6E3DC] px-3 py-2 text-[10px] font-bold text-[#456273] disabled:opacity-50">Tidak, batalkan</button>
+                </div>
+              )}
+              {hoursProposal && (
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void confirmHours()} disabled={busySaving} className="inline-flex items-center gap-1.5 rounded-lg bg-[#103A57] px-3 py-2 text-[10px] font-extrabold text-white disabled:opacity-50">
+                    {busySaving ? <LoaderCircle size={12} className="animate-spin"/> : <Check size={12}/>} Ya, benar
+                  </button>
+                  <button type="button" onClick={rejectHours} disabled={busySaving} className="rounded-lg border border-[#D6E3DC] px-3 py-2 text-[10px] font-bold text-[#456273] disabled:opacity-50">Bukan, ubah</button>
+                </div>
+              )}
+              {cardActions && response && cardActions.id === response.id && (
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  {cardActions.actions.map((action) => (
+                    <button key={action} type="button" onClick={() => runCardAction(action)} className="rounded-full bg-[#EEF5F1] px-2.5 py-1.5 text-[10px] font-extrabold text-[#103A57] hover:bg-[#DCEFE5]">
+                      {CARD_ACTION_LABEL[action]}
+                    </button>
+                  ))}
                 </div>
               )}
               <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-[#EAF0EC] pt-2">

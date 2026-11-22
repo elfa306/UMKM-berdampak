@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { todayISO } from '@/lib/accounting';
+import { PROFILE_HOURS_EVENT, isValidJam } from '@/lib/jamOperasional';
 import BottomNav from '@/components/BottomNav';
 
 type JenisUsaha = 'retail' | 'manufaktur' | 'jasa' | 'campuran';
@@ -23,6 +24,8 @@ type FormProfil = {
   bidang_usaha: string;
   memiliki_persediaan: 'ya' | 'tidak' | '';
   metode_pembayaran: MetodePembayaran | '';
+  jam_buka: string;
+  jam_tutup: string;
 };
 type ProfilTersimpan = {
   user_id: string;
@@ -50,6 +53,8 @@ const FORM_AWAL: FormProfil = {
   bidang_usaha: '',
   memiliki_persediaan: '',
   metode_pembayaran: '',
+  jam_buka: '',
+  jam_tutup: '',
 };
 
 const JENIS = [
@@ -104,6 +109,8 @@ function keForm(data: ProfilTersimpan | null, namaMetadata = ''): FormProfil {
     memiliki_persediaan: data.memiliki_persediaan == null ? '' : data.memiliki_persediaan ? 'ya' : 'tidak',
     // Nilai Belibayar lama dinormalisasi ke manual karena gateway tersebut tidak lagi digunakan.
     metode_pembayaran: data.metode_pembayaran === 'gopay_macrodroid' ? 'gopay_macrodroid' : data.metode_pembayaran ? 'manual' : '',
+    jam_buka: '',
+    jam_tutup: '',
   };
 }
 
@@ -117,6 +124,8 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [userId, setUserId] = useState('');
+  // False bila kolom jam_buka/jam_tutup belum ada (migration v20 belum dijalankan).
+  const [jamSupported, setJamSupported] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -135,7 +144,10 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
           bidang_usaha: 'Makanan & Minuman (Kedai Kopi & Roti)',
           memiliki_persediaan: 'ya',
           metode_pembayaran: 'manual',
+          jam_buka: '08:00',
+          jam_tutup: '17:00',
         });
+        setJamSupported(true);
         setLoading(false);
         return;
       }
@@ -155,12 +167,24 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
       }
 
       const profil = (data ?? null) as ProfilTersimpan | null;
+
+      // Jam usaha dibaca terpisah supaya halaman tetap berjalan sebelum migration v20 dijalankan.
+      let jamBuka = '';
+      let jamTutup = '';
+      const hours = await supabase.from('business_profiles').select('jam_buka,jam_tutup').eq('user_id', user.id).maybeSingle();
+      setJamSupported(!hours.error);
+      if (!hours.error && hours.data) {
+        const row = hours.data as { jam_buka?: string | null; jam_tutup?: string | null };
+        jamBuka = isValidJam(row.jam_buka) ? row.jam_buka : '';
+        jamTutup = isValidJam(row.jam_tutup) ? row.jam_tutup : '';
+      }
+
       if (editMode && !profil) {
         setForm({ ...FORM_AWAL, nama_usaha: user.user_metadata?.nama_usaha ?? '[Nama Usaha]' });
         setLoading(false);
         return;
       }
-      setForm(keForm(profil, user.user_metadata?.nama_usaha ?? ''));
+      setForm({ ...keForm(profil, user.user_metadata?.nama_usaha ?? ''), jam_buka: jamBuka, jam_tutup: jamTutup });
       if (!editMode && sudahLengkap(profil)) {
         // Profil sudah lengkap: bila belum punya produk, lanjutkan ke pengisian inventaris awal
         const { count } = await supabase.from('products').select('id', { count: 'exact', head: true }).eq('user_id', user.id).eq('aktif', true);
@@ -191,6 +215,10 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
       if (form.tanggal_mulai_usaha > todayISO()) return voidError('Tanggal mulai usaha tidak boleh di masa depan.');
       if (!Number.isInteger(hari) || hari < 1 || hari > 31) return voidError('Hari operasional harus antara 1 sampai 31 hari per bulan.');
       if (!Number.isSafeInteger(modal) || modal <= 0) return voidError('Kebutuhan modal harus berupa bilangan bulat positif.');
+      if (jamSupported) {
+        if (Boolean(form.jam_buka) !== Boolean(form.jam_tutup)) return voidError('Isi jam buka dan jam tutup sekaligus, atau kosongkan keduanya.');
+        if (form.jam_buka && form.jam_buka === form.jam_tutup) return voidError('Jam buka dan jam tutup tidak boleh sama.');
+      }
     }
     if (step === 1) {
       if (!form.jenis_usaha || !form.bentuk_usaha || !form.bidang_usaha.trim() || form.memiliki_persediaan === '') {
@@ -243,6 +271,15 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
         .from('business_profiles')
         .upsert(payload, { onConflict: 'user_id' });
       if (saveError) throw saveError;
+
+      if (jamSupported) {
+        const { error: hoursError } = await supabase
+          .from('business_profiles')
+          .update({ jam_buka: form.jam_buka || null, jam_tutup: form.jam_tutup || null })
+          .eq('user_id', userId);
+        if (hoursError) throw hoursError;
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event(PROFILE_HOURS_EVENT));
+      }
 
       const { error: metadataError } = await supabase.auth.updateUser({ data: { nama_usaha: payload.nama_usaha } });
       if (metadataError) throw metadataError;
@@ -316,6 +353,23 @@ export default function BusinessProfileWizard({ mode = 'onboarding' }: Props) {
                     Hari operasional per bulan
                     <input type="number" min={1} max={31} step={1} value={form.hari_buka_per_bulan} onChange={(e) => ubah('hari_buka_per_bulan', e.target.value)} required className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none focus:border-emerald-500" />
                   </label>
+                </div>
+                <div className="grid gap-2">
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                      Jam buka
+                      <input type="time" value={form.jam_buka} onChange={(e) => ubah('jam_buka', e.target.value)} disabled={!jamSupported} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400" />
+                    </label>
+                    <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                      Jam tutup
+                      <input type="time" value={form.jam_tutup} onChange={(e) => ubah('jam_tutup', e.target.value)} disabled={!jamSupported} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400" />
+                    </label>
+                  </div>
+                  <span className="text-xs font-normal text-slate-500">
+                    {jamSupported
+                      ? 'Opsional. Cashie memakai jam ini untuk menyapa dan mengingatkan di waktu yang pas. Boleh dikosongkan; Cashie akan menanyakannya saat ngobrol.'
+                      : 'Pengaturan jam usaha aktif setelah supabase/migration_v20_jam_operasional.sql dijalankan di Supabase.'}
+                  </span>
                 </div>
                 <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
                   Perkiraan kebutuhan modal (Rp)
