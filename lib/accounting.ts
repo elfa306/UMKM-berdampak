@@ -1,3 +1,5 @@
+import { isBiayaBulanan } from './biayaBahan';
+
 export type Product = { id: string; nama: string; harga: number };
 export type Tx = {
   id: string;
@@ -9,6 +11,7 @@ export type Tx = {
   qty: number;
   metode: 'tunai' | 'qris' | null;
   created_at: string;
+  periode_biaya?: 'harian' | 'bulanan' | null;
 };
 
 export const rupiah = (n: number) =>
@@ -22,7 +25,8 @@ export const todayISO = () => new Date().toLocaleDateString('en-CA', { timeZone:
  * - Parameter modal hanya mewakili HPP legacy yang pernah disimpan pada modal_harian.
  * - Sesi baru menyimpan modal_harian = 0; HPP aktualnya dibaca dari jurnal akuntansi.
  * - Setoran modal dan saldo kas/bank tidak pernah dihitung sebagai pendapatan penjualan.
- * - Transaksi 'biaya' tetap dihitung sebagai pengeluaran operasional pada ringkasan ini.
+ * - Biaya rutin bulanan (mis. gas/listrik) tidak dibebankan penuh pada untung harian.
+ *   Biaya tersebut tetap dicatat sebagai kas keluar dan masuk laporan bulanan.
  */
 export function summarize(modal: number, txs: Tx[]) {
   const sum = (f: (t: Tx) => boolean) => txs.filter(f).reduce((a, t) => a + t.jumlah, 0);
@@ -32,11 +36,12 @@ export function summarize(modal: number, txs: Tx[]) {
   const pendapatan = tunai + qris;
   const hpp = modal;
   const labaKotor = pendapatan - hpp;
-  const beban = sum((t) => t.jenis === 'biaya');
+  const totalPengeluaran = sum((t) => t.jenis === 'biaya');
+  const beban = sum((t) => t.jenis === 'biaya' && !isBiayaBulanan(t));
   const labaBersih = labaKotor - beban;
   const totalBiaya = hpp + beban;
   const progress = totalBiaya > 0 ? Math.min(100, Math.round((pendapatan / totalBiaya) * 100)) : 0;
-  return { tunai, qris, pendapatan, hpp, labaKotor, beban, labaBersih, totalBiaya, progress };
+  return { tunai, qris, pendapatan, hpp, labaKotor, beban, totalPengeluaran, labaBersih, totalBiaya, progress };
 }
 
 // ---- Helper tampilan & input ----

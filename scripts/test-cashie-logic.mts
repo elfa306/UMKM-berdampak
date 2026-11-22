@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { parseOperatingHours } from '../lib/jamOperasional';
-import { klasifikasiBiaya, jawabanKategori, kategoriDariPilihan, ringkasBiayaPerProduk, kolomProdukBelumAda, tanpaKolomProduk, cocokkanProdukTepat, isConfirmedMaterialExpense } from '../lib/biayaBahan';
+import { klasifikasiBiaya, klasifikasiPeriodeBiaya, isBiayaBulanan, jawabanKategori, kategoriDariPilihan, ringkasBiayaPerProduk, kolomProdukBelumAda, tanpaKolomProduk, cocokkanProdukTepat, isConfirmedMaterialExpense } from '../lib/biayaBahan';
+import { summarize } from '../lib/accounting';
 import { extractPlan, planReply } from '../lib/cashieMemory';
 import { matchLocalExport } from '../lib/cashieIntents';
 
@@ -13,8 +14,31 @@ t('listrik = operasional', () => assert.equal(klasifikasiBiaya('bayar listrik'),
 t('token listrik = operasional (bukan bahan)', () => assert.equal(klasifikasiBiaya('beli token listrik'), 'operasional'));
 t('tidak jelas = null', () => assert.equal(klasifikasiBiaya('pengeluaran lain'), null));
 t('gas elpiji = operasional', () => assert.equal(klasifikasiBiaya('isi gas elpiji'), 'operasional'));
+t('listrik dan gas dikenali sebagai biaya bulanan', () => {
+  assert.equal(klasifikasiPeriodeBiaya('bayar listrik bulan ini'), 'bulanan');
+  assert.equal(klasifikasiPeriodeBiaya('beli gas elpiji 3 kg'), 'bulanan');
+});
+t('pengeluaran harian tidak salah diklasifikasikan sebagai bulanan', () => {
+  assert.equal(klasifikasiPeriodeBiaya('parkir pasar'), 'harian');
+  assert.equal(isBiayaBulanan({ keterangan: 'isi gas' }), true);
+  assert.equal(isBiayaBulanan({ periode_biaya: 'harian', keterangan: 'bayar listrik' }), false);
+});
 t('pilihan form bahan baku', () => assert.equal(kategoriDariPilihan('Belanja bahan baku', ''), 'bahan_produksi'));
 t('pilihan form bahan baku tapi teks listrik', () => assert.equal(kategoriDariPilihan('Belanja bahan baku', 'listrik'), 'operasional'));
+
+// Regresi untung harian: tagihan bulanan tetap menjadi kas keluar, tetapi tidak
+// dipotong seluruhnya dari laba harian. Biaya harian tetap dikurangkan.
+t('untung harian mengecualikan tagihan bulanan tetapi tetap mencatat total uang keluar', () => {
+  const summary = summarize(0, [
+    { id: 'sale', jenis: 'penjualan', keterangan: 'Kopi', jumlah: 100000, qty: 1, metode: 'tunai', created_at: '2026-11-22T09:00:00Z' },
+    { id: 'electricity', jenis: 'biaya', keterangan: 'Bayar listrik bulan ini', jumlah: 30000, qty: 1, metode: null, created_at: '2026-11-22T10:00:00Z' },
+    { id: 'gas', jenis: 'biaya', keterangan: 'Beli gas 3 kg', jumlah: 25000, qty: 1, metode: null, created_at: '2026-11-22T10:10:00Z' },
+    { id: 'parking', jenis: 'biaya', keterangan: 'Parkir belanja', jumlah: 5000, qty: 1, metode: null, created_at: '2026-11-22T10:20:00Z' },
+  ]);
+  assert.equal(summary.beban, 5000);
+  assert.equal(summary.totalPengeluaran, 60000);
+  assert.equal(summary.labaBersih, 95000);
+});
 
 // Jawaban kategori
 t('jawab "bahan produksi"', () => assert.equal(jawabanKategori('bahan produksi')?.kategori, 'bahan_produksi'));

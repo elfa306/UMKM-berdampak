@@ -5,6 +5,20 @@
  */
 
 export type KategoriBiaya = 'bahan_produksi' | 'operasional';
+export type PeriodeBiaya = 'harian' | 'bulanan';
+
+// Biaya rutin satu periode tidak dibebankan sekaligus pada ringkasan untung harian.
+const BIAYA_BULANAN = /\b(listrik|pln|token|pdam|wifi|internet|sewa|kontrakan|langganan|gas|elpiji|lpg)\b/i;
+
+export function klasifikasiPeriodeBiaya(keterangan: string): PeriodeBiaya {
+  return BIAYA_BULANAN.test(keterangan) ? 'bulanan' : 'harian';
+}
+
+export function isBiayaBulanan(row: { periode_biaya?: string | null; keterangan?: string }): boolean {
+  if (row.periode_biaya === 'bulanan') return true;
+  if (row.periode_biaya === 'harian') return false;
+  return BIAYA_BULANAN.test(row.keterangan ?? '');
+}
 
 /** Cocokkan nama produk secara tepat. Nama tidak cocok atau duplikat yang ambigu menghasilkan null. */
 export function cocokkanProdukTepat(nama: string, produk: Array<{ id: string; nama: string }>): string | null {

@@ -21,6 +21,12 @@ npm run typecheck                  # opsional
 - Repo: `tsconfig.tsbuildinfo` tidak lagi di-track, dua file env example digabung ke `.env.local.example`,
   skrip `typecheck` ditambahkan.
 
+## Migration Supabase v24 — periode biaya harian/bulanan
+- Jalankan `supabase/migration_v24_biaya_operasional_bulanan.sql` setelah migration v23 melalui Supabase Dashboard → SQL Editor.
+- Tagihan rutin seperti gas, listrik/token, internet, sewa, dan langganan otomatis ditandai sebagai biaya bulanan.
+- Biaya bulanan tetap masuk laporan laba rugi bulanan dan arus kas, tetapi tidak langsung mengurangi kartu “Untung bersih hari ini” di Beranda.
+- Pengeluaran harian seperti parkir dan transportasi tetap mengurangi untung harian.
+
 ## Tidak dikerjakan
 - Dark mode (warna brand ditulis langsung di banyak komponen; perlu keputusan desain).
 - Animasi keluar dialog (hanya animasi masuk).
