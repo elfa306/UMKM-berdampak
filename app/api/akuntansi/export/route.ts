@@ -169,7 +169,9 @@ export async function GET(request: Request) {
       ...(snapshot.profitLoss.cogs > 0 ? [[cogsLabel, money(snapshot.profitLoss.cogs)], ['Laba kotor', money(snapshot.profitLoss.grossProfit)]] : []),
       ...(snapshot.profitLoss.materialCosts > 0 ? [['Biaya bahan produksi tercatat (estimasi pembelian, bukan pemakaian)', money(snapshot.profitLoss.materialCosts)], ['Selisih setelah biaya bahan tercatat', money(snapshot.profitLoss.afterRecordedMaterials)]] : []),
       ['Beban operasional', money(snapshot.profitLoss.operatingExpenses)],
-      ['Beban lainnya', money(snapshot.profitLoss.otherExpenses)], ['LABA / (RUGI) BERSIH', money(snapshot.profitLoss.netProfit)],
+      ['Beban lainnya', money(snapshot.profitLoss.otherExpenses)],
+      [snapshot.profitLoss.materialCosts > 0 ? 'ESTIMASI SURPLUS SETELAH BIAYA TERCATAT' : 'LABA / (RUGI) BERSIH', money(snapshot.profitLoss.netProfit)],
+      ...(snapshot.profitLoss.materialCosts > 0 ? [['Catatan', 'Surplus ini masih estimasi: pembelian bahan dihitung sebagai biaya tercatat, sedangkan sisa bahan yang belum digunakan belum dikurangkan.']] : []),
     ];
     for (const row of profitRows) summary.addRow(row);
     r = (summary.lastRow?.number ?? summary.rowCount) + 2;
@@ -195,6 +197,26 @@ export async function GET(request: Request) {
     summary.addRow(['Catatan', String(snapshot.note || '')]);
     styleDataRows(summary, 5, (summary.lastRow?.number ?? summary.rowCount), [2]);
     summary.views = [{ state: 'frozen', ySplit: 4, showGridLines: false }];
+
+    // Rincian penjualan dan pembelian bahan yang sudah dihubungkan ke produk katalog.
+    const productSheet = workbook.addWorksheet('Penjualan & Bahan per Produk');
+    productSheet.columns = [{ width: 34 }, { width: 22 }, { width: 16 }, { width: 25 }, { width: 23 }];
+    addHeading(productSheet, 'PENJUALAN DAN BIAYA BAHAN PER PRODUK', name + ' · Periode ' + month, 5);
+    productSheet.addRow(['Rincian ini hanya mencakup transaksi yang sudah terhubung ke produk. Biaya bahan adalah pembelian tercatat, bukan bahan yang pasti sudah terpakai.']);
+    productSheet.mergeCells(3, 1, 3, 5);
+    productSheet.getCell(3, 1).alignment = { wrapText: true, vertical: 'middle' };
+    productSheet.getRow(3).height = 32;
+    productSheet.addRow(['Produk', 'Penjualan (Rp)', 'Qty terjual', 'Biaya bahan tercatat (Rp)', 'Selisih (Rp)']);
+    styleTableHeader(productSheet.getRow(4));
+    const productCostRows = (snapshot.productCosts ?? []).map((item) => [
+      item.nama, money(item.penjualan), money(item.qtyTerjual), money(item.biayaBahanTercatat), money(item.selisih),
+    ]);
+    if (productCostRows.length) productCostRows.forEach((row) => productSheet.addRow(row));
+    else productSheet.addRow(['Belum ada transaksi yang terhubung ke produk', 0, 0, 0, 0]);
+    const productEnd = Math.max(4, productSheet.lastRow?.number ?? productSheet.rowCount);
+    styleDataRows(productSheet, 5, productEnd, [2, 4, 5]);
+    productSheet.views = [{ state: 'frozen', ySplit: 4, showGridLines: false }];
+    productSheet.autoFilter = { from: { row: 4, column: 1 }, to: { row: productEnd, column: 5 } };
 
     // 2. Neraca saldo pergerakan bulan berjalan.
     const trial = workbook.addWorksheet('Neraca Saldo');
