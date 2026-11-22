@@ -35,6 +35,7 @@ export default function QuickRecordModal({
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [kategoriBiaya, setKategoriBiaya] = useState('Belanja bahan baku');
   const [produkBahanId, setProdukBahanId] = useState('');
+  const [produkJualId, setProdukJualId] = useState('');
   const [produkKatalog, setProdukKatalog] = useState<Array<{ id: string; nama: string }>>([]);
   const [errMsg, setErrMsg] = useState('');
 
@@ -73,6 +74,7 @@ export default function QuickRecordModal({
       setNominalStr('');
       setKeterangan('');
       setProdukBahanId('');
+      setProdukJualId('');
       setLoading(false);
       if (onSuccess) onSuccess(detail);
       onClose();
@@ -144,9 +146,10 @@ export default function QuickRecordModal({
       const simpan = (payload: Record<string, unknown>) => supabase.from('transactions').insert(payload).select('*').single();
       const kategori = jenis === 'biaya' ? kategoriDariPilihan(kategoriBiaya, note) : null;
       const produk = kategori === 'bahan_produksi' ? produkKatalog.find((p) => p.id === produkBahanId) : undefined;
+      const produkJual = jenis === 'penjualan' ? produkKatalog.find((p) => p.id === produkJualId) : undefined;
       const lengkap = jenis === 'biaya'
         ? { ...baris, kategori_biaya: kategori, ...(produk ? { produk_terkait_id: produk.id, produk_terkait: produk.nama } : {}) }
-        : baris;
+        : produkJual ? { ...baris, product_id: produkJual.id } : baris;
       let { data, error } = await simpan(lengkap);
       // Sebelum migration v22 dijalankan, simpan tanpa relasi produk; sebelum v21, tanpa kategori juga.
       if (error && kolomProdukBelumAda(error.message)) ({ data, error } = await simpan(tanpaKolomProduk(lengkap)));
@@ -165,9 +168,9 @@ export default function QuickRecordModal({
     }
   };
 
-  // Daftar produk untuk mengaitkan belanja bahan (opsional); tidak ada untuk mode tamu.
+  // Daftar produk aktif untuk mengaitkan penjualan atau belanja bahan (opsional).
   useEffect(() => {
-    if (!isOpen || type !== 'keluar' || kategoriBiaya !== 'Belanja bahan baku' || produkKatalog.length) return;
+    if (!isOpen || (type !== 'keluar' && type !== 'masuk') || produkKatalog.length) return;
     let aktif = true;
     void (async () => {
       const { data } = await supabase.from('products').select('id,nama')
@@ -175,7 +178,7 @@ export default function QuickRecordModal({
       if (aktif && data?.length) setProdukKatalog(data as Array<{ id: string; nama: string }>);
     })();
     return () => { aktif = false; };
-  }, [isOpen, type, kategoriBiaya, produkKatalog.length]);
+  }, [isOpen, type, produkKatalog.length]);
 
   // Saat modal dibuka, pakai tab yang diminta pemanggil.
   useEffect(() => {
@@ -281,6 +284,21 @@ export default function QuickRecordModal({
                 </button>
               ))}
             </div>
+            )}
+
+            {type === 'masuk' && metode !== 'qris' && produkKatalog.length > 0 && (
+              <div className="mt-3">
+                <select
+                  aria-label="Hubungkan penjualan ke produk (opsional)"
+                  value={produkJualId}
+                  onChange={(e) => setProdukJualId(e.target.value)}
+                  className="w-full rounded-xl bg-white px-3 py-2.5 text-xs font-bold text-[#103A57]"
+                >
+                  <option value="">Hubungkan ke produk untuk laporan (opsional)</option>
+                  {produkKatalog.map((p) => <option key={p.id} value={p.id}>{p.nama}</option>)}
+                </select>
+                <p className="mt-1 text-[10px] text-slate-500">Pilihan ini hanya mengelompokkan laporan, tidak mengubah stok.</p>
+              </div>
             )}
 
             {type === 'keluar' && (
