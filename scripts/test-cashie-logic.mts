@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { parseOperatingHours } from '../lib/jamOperasional';
-import { klasifikasiBiaya, jawabanKategori, kategoriDariPilihan, ringkasBiayaPerProduk, kolomProdukBelumAda, tanpaKolomProduk } from '../lib/biayaBahan';
+import { klasifikasiBiaya, jawabanKategori, kategoriDariPilihan, ringkasBiayaPerProduk, kolomProdukBelumAda, tanpaKolomProduk, cocokkanProdukTepat, isConfirmedMaterialExpense } from '../lib/biayaBahan';
 import { extractPlan, planReply } from '../lib/cashieMemory';
 import { matchLocalExport } from '../lib/cashieIntents';
 
@@ -24,6 +24,18 @@ t('jawab ambigu = null', () => assert.equal(jawabanKategori('hmm entah'), null))
 t('jawab kalimat panjang = null', () => assert.equal(jawabanKategori('tadi saya pergi ke pasar lalu bertemu teman lama dan ngobrol cukup lama sekali'), null));
 t('jawab kosong = null', () => assert.equal(jawabanKategori(''), null));
 t('jawab "bukan bahan" = operasional', () => assert.equal(jawabanKategori('bukan bahan')?.kategori, 'operasional'));
+
+// Relasi produk penjualan dan pengeluaran bahan
+const katalogUji = [{ id: 'kue-1', nama: 'Kue Cokelat' }, { id: 'roti-1', nama: 'Roti Keju' }];
+t('produk hanya terhubung dengan nama katalog yang sama persis', () => assert.equal(cocokkanProdukTepat(' kue   cokelat ', katalogUji), 'kue-1'));
+t('produk yang tidak ditemukan tidak ditebak dari sebagian nama', () => assert.equal(cocokkanProdukTepat('kue', katalogUji), null));
+t('nama produk duplikat dianggap ambigu', () => assert.equal(cocokkanProdukTepat('Kue Cokelat', [...katalogUji, { id: 'kue-2', nama: 'kue cokelat' }]), null));
+t('hanya biaya terkonfirmasi bahan produksi menyelesaikan rencana beli bahan', () => {
+  assert.equal(isConfirmedMaterialExpense({ jenis: 'biaya', kategori_biaya: 'bahan_produksi' }), true);
+  assert.equal(isConfirmedMaterialExpense({ jenis: 'biaya', kategori_biaya: 'operasional' }), false);
+  assert.equal(isConfirmedMaterialExpense({ jenis: 'biaya' }), false);
+  assert.equal(isConfirmedMaterialExpense({ jenis: 'penjualan', kategori_biaya: 'bahan_produksi' }), false);
+});
 
 // Jam operasional
 t('jam buka 7 tutup 8 malam', () => { const r = parseOperatingHours('buka jam 7 pagi tutup jam 8 malam'); assert.deepEqual(r, { buka: '07:00', tutup: '20:00' }); });
