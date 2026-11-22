@@ -82,7 +82,7 @@ export type ProactiveIntent =
   | { type: 'ask_hours'; suggestion: { buka: string; tutup: string } | null }
   | { type: 'plan_followup'; planId: string }
   | { type: 'classify_expense'; transactionId: string };
-export type ProactiveMessage = { id: string; text: string; actions: ProactiveAction[]; intent?: ProactiveIntent };
+export type ProactiveMessage = { id: string; text: string; actions: ProactiveAction[]; intent?: ProactiveIntent; /** Sapaan saat CAVA dibuka: tidak dihitung ke kuota harian dan tidak dianggap penolakan bila ditutup. */ greeting?: boolean };
 type Candidate = ProactiveMessage & { cooldownDays: number };
 
 type Memory = {
@@ -92,6 +92,9 @@ type Memory = {
   dismissed: number;
   reactiveCount: number;
   reactiveLastAt: number;
+  /** Jumlah sapaan pembuka hari ini dan waktu terakhir (ms). */
+  greets: number;
+  greetedAt: number;
   seen: Record<string, string>;
 };
 
@@ -104,6 +107,9 @@ const MAX_REACTIVE_PER_DAY = 3;
 const MIN_GAP_MS = 90 * 60_000;
 const MIN_REACTIVE_GAP_MS = 10 * 60_000;
 const MIN_AFTER_PROACTIVE_MS = 3 * 60_000;
+const MIN_AFTER_GREETING_MS = 2 * 60_000;
+const MIN_GREETING_GAP_MS = 20_000;
+const AWAY_BEFORE_REGREET_MS = 3 * 60_000;
 const MAX_DISMISSED_PER_DAY = 2;
 const SNAPSHOT_TTL_MS = 5 * 60_000;
 const RECURRING = /\b(listrik|pln|pdam|wifi|internet|sewa|kontrakan|gaji|pulsa|elpiji)\b/;
@@ -117,6 +123,8 @@ const DEFAULT_WINDOWS: Windows = {
   open: 7 * 60,
 };
 
+/** True setelah sapaan pembuka pertama pada pemuatan halaman ini (pindah halaman tidak memicu sapaan lagi). */
+let openGreetingDone = false;
 let activeMemoryKey: string | null = null;
 let activeUserId: string | null = null;
 
@@ -348,7 +356,57 @@ function timeGreeting(minute: number): string {
 }
 
 /** Daftar pesan yang layak, berurutan menurut prioritas. Daftar kosong berarti Cashie diam. */
-export function proactiveCandidates(s: ProactiveSnapshot, date: Date, memory: Pick<Memory, 'count'>): Candidate[] {
+
+function openingTimeGreeting(minute: number): string {
+  const hour = Math.floor(minute / 60) % 24;
+  if (hour >= 22 || hour < 4) return 'selamat malam';
+  if (hour < 11) return 'selamat pagi';
+  if (hour < 15) return 'selamat siang';
+  if (hour < 18) return 'selamat sore';
+  return 'selamat malam';
+}
+
+/**
+ * Sapaan setiap kali CAVA dibuka. Singkat, berganti-ganti kalimatnya, dan hanya menyebut angka
+ * yang benar-benar ada di catatan. Snapshot boleh null (data belum termuat): Cashie tetap menyapa.
+ */
+export function openingGreeting(s: ProactiveSnapshot | null, date: Date, greetIndex: number): ProactiveMessage {
+  const minute = jakartaMinute(date);
+  const hour = Math.floor(minute / 60);
+  const salam = capitalize(openingTimeGreeting(minute));
+  const shop = s?.profile.name?.trim() || null;
+  const seed = `${date.getTime()}:${greetIndex}`;
+  const firstToday = greetIndex === 0;
+  const late = hour >= 22 || hour < 4;
+
+  let text: string;
+  let actions: ProactiveAction[] = [];
+  if (late) {
+    text = pick(seed, [
+      `${salam}! Masih bekerja selarut ini? Jangan lupa istirahat ya.`,
+      `${salam}! Ada yang mau dicatat sebelum istirahat?`,
+    ]);
+  } else if (s && s.todaySales.count > 0) {
+    const info = `Hari ini sudah ada ${s.todaySales.count} penjualan tercatat, total ${rupiah(s.todaySales.total)}.`;
+    text = pick(seed, [`${salam}! ${info} Mantap, lanjut ya.`, `Halo lagi! ${info}`, `${salam}! ${info} Ada yang mau ditambah?`]);
+  } else if (s && firstToday && s.yesterdaySales.count > 0) {
+    text = pick(seed, [
+      `${salam}! Kemarin penjualan tercatat ${rupiah(s.yesterdaySales.total)}. Hari ini kita mulai dari mana?`,
+      `${salam}${shop ? `, ${shop}` : ''}! Kemarin penjualan ${rupiah(s.yesterdaySales.total)}. Semoga hari ini lebih ramai!`,
+    ]);
+  } else {
+    text = pick(seed, [
+      `${salam}${shop ? `! Gimana kabar ${shop} hari ini?` : '! Ada yang bisa saya bantu hari ini?'}`,
+      `Halo, ${salam.toLowerCase()}! Ada yang ingin dicatat atau kamu mau ngobrol soal usaha?`,
+      `${salam}! Saya siap menemani. Mau mulai dari mana?`,
+      `Hai, selamat datang kembali! Ada kabar apa dari usahamu?`,
+    ]);
+    actions = ['record_sale', 'record_expense'];
+  }
+  return { id: `open-${date.getTime()}`, text, actions, greeting: true };
+}
+
+export function proactiveCandidates(s: ProactiveSnapshot, date: Date, memory: Pick<Memory, 'count'> & { greets?: number }): Candidate[] {
   const windows = resolveWindows(s);
   let now = jakartaMinute(date);
   if (windows.overnight && now < windows.open - 60) now += 1440;
@@ -359,8 +417,12 @@ export function proactiveCandidates(s: ProactiveSnapshot, date: Date, memory: Pi
   const list: Candidate[] = [];
   const day = s.today;
   const shop = s.profile.name?.trim() || null;
-  const add = (id: string, text: string, cooldownDays: number, actions: ProactiveAction[] = [], intent?: ProactiveIntent) =>
+  // Sapaan pembuka sudah menyapa hari ini; sapaan pagi dan sapaan umum tidak perlu diulang.
+  const greeted = (memory.greets ?? 0) > 0;
+  const add = (id: string, text: string, cooldownDays: number, actions: ProactiveAction[] = [], intent?: ProactiveIntent) => {
+    if (greeted && (id.startsWith('morning-') || id.startsWith('greeting-'))) return;
     list.push({ id, text, cooldownDays, actions, intent });
+  };
   const variant = (id: string, options: string[]) => pick(`${day}:${id}`, options);
 
   // Teman yang baik tahu kapan usahamu buka dan tutup; bila belum tahu, ia bertanya.
@@ -539,13 +601,15 @@ function readMemory(key: string, day: string): Memory {
         dismissed: sameDay ? Number(parsed.dismissed) || 0 : 0,
         reactiveCount: sameDay ? Number(parsed.reactiveCount) || 0 : 0,
         reactiveLastAt: sameDay ? Number(parsed.reactiveLastAt) || 0 : 0,
+        greets: sameDay ? Number(parsed.greets) || 0 : 0,
+        greetedAt: sameDay ? Number(parsed.greetedAt) || 0 : 0,
         seen: pruneSeen(seen, day),
       };
     }
   } catch {
     // Penyimpanan lokal yang diblokir atau rusak tidak boleh mengganggu asisten.
   }
-  return { day, count: 0, lastAt: 0, dismissed: 0, reactiveCount: 0, reactiveLastAt: 0, seen: {} };
+  return { day, count: 0, lastAt: 0, dismissed: 0, reactiveCount: 0, reactiveLastAt: 0, greets: 0, greetedAt: 0, seen: {} };
 }
 
 function writeMemory(key: string, memory: Memory) {
@@ -556,7 +620,8 @@ function gateAllows(memory: Memory, nowMs: number): boolean {
   return memory.count < MAX_PER_DAY
     && memory.dismissed < MAX_DISMISSED_PER_DAY
     && nowMs - memory.lastAt >= MIN_GAP_MS
-    && nowMs - memory.reactiveLastAt >= MIN_AFTER_PROACTIVE_MS;
+    && nowMs - memory.reactiveLastAt >= MIN_AFTER_PROACTIVE_MS
+    && nowMs - memory.greetedAt >= MIN_AFTER_GREETING_MS;
 }
 
 function reactiveAllows(memory: Memory, nowMs: number): boolean {
@@ -682,6 +747,33 @@ export function useCashieProactive({ enabled, canInterrupt, deliver }: Options) 
       }
     };
 
+    // Sapaan setiap kali CAVA dibuka: saat dimuat, dan saat kembali setelah ditinggal beberapa menit.
+    const greet = async (attempt = 0): Promise<void> => {
+      if (cancelled) return;
+      if (running || !ready()) {
+        if (attempt < 6) window.setTimeout(() => void greet(attempt + 1), 2500);
+        return;
+      }
+      running = true;
+      try {
+        const day = todayISO();
+        const loaded = await loadSnapshot();
+        if (loaded) { snapshot = loaded; snapshotAt = Date.now(); }
+        if (!activeMemoryKey || !ready()) return;
+        const memory = readMemory(activeMemoryKey, day);
+        if (Date.now() - memory.greetedAt < MIN_GREETING_GAP_MS) return;
+        const message = openingGreeting(loaded, new Date(), memory.greets);
+        memory.greets += 1;
+        memory.greetedAt = Date.now();
+        writeMemory(activeMemoryKey, memory);
+        deliverRef.current(message);
+      } catch (error) {
+        console.warn('Sapaan Cashie tidak dapat ditampilkan:', error);
+      } finally {
+        running = false;
+      }
+    };
+
     const react = async (detail: QuickSavedDetail) => {
       if (running || !ready()) return;
       running = true;
@@ -709,9 +801,21 @@ export function useCashieProactive({ enabled, canInterrupt, deliver }: Options) 
       }
     };
 
-    const first = window.setTimeout(() => void tick(), 2500);
+    let hiddenAt: number | null = null;
+    const first = window.setTimeout(() => {
+      if (openGreetingDone) { void tick(); return; }
+      openGreetingDone = true;
+      void greet();
+    }, 1200);
     const interval = window.setInterval(() => void tick(), 60_000);
-    const onVisible = () => { if (document.visibilityState === 'visible') window.setTimeout(() => void tick(), 1500); };
+    const onVisible = () => {
+      if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+      if (document.visibilityState !== 'visible') return;
+      const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+      hiddenAt = null;
+      if (away >= AWAY_BEFORE_REGREET_MS) window.setTimeout(() => void greet(), 800);
+      else window.setTimeout(() => void tick(), 1500);
+    };
     const invalidate = () => { snapshotAt = 0; };
     // Transaksi yang dicatat Cashie sendiri tidak memicu reaksi: kartu suksesnya masih tampil sehingga ready() bernilai false.
     const onSaved = (event: Event) => {

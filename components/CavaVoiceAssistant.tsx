@@ -1493,7 +1493,8 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       showResponse(message.text, 'answer', false, PROACTIVE_CARD_MS);
     }
     const id = responseRef.current?.id ?? null;
-    proactiveIdRef.current = id;
+    // Menutup sapaan pembuka tidak dianggap menolak pesan proaktif.
+    proactiveIdRef.current = message.greeting ? null : id;
     if (id && message.actions.length) setCardActions({ id, actions: message.actions });
     historyRef.current = [...historyRef.current, { id: crypto.randomUUID(), role: 'assistant' as const, content: message.text }].slice(-12);
     if (message.intent?.type === 'classify_expense') classifyAwaitRef.current = { until: Date.now() + HOURS_AWAIT_MS, transactionId: message.intent.transactionId };
