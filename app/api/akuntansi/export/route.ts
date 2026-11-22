@@ -262,14 +262,14 @@ export async function GET(request: Request) {
     let selectedAccounts: TrialRow[] = [];
     let metrics: Array<[string, number, string]> = [];
     if (kind === 'retail') {
-      selectedAccounts = monthly.filter((a) => ['1200', '1210', '1220', '1230', '5000', '4000', '6000', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
+      selectedAccounts = monthly.filter((a) => ['1200', '1210', '1220', '1230', '5000', '5200', '4000', '6000', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
       metrics = [
         ['Penjualan barang', money(snapshot.profitLoss.revenue), 'Pendapatan yang masuk ke akun pendapatan.'],
         ['HPP barang dagangan', money(snapshot.profitLoss.cogs), 'Biaya pokok atas barang yang terjual.'],
         ['Laba kotor perdagangan', money(snapshot.profitLoss.grossProfit), 'Pendapatan dikurangi HPP.'],
       ];
     } else if (kind === 'manufaktur') {
-      selectedAccounts = monthly.filter((a) => ['1210', '1220', '1230', '2110', '2120', '5000', '5100', '4000', '6000', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
+      selectedAccounts = monthly.filter((a) => ['1210', '1220', '1230', '2110', '2120', '5000', '5100', '5200', '4000', '6000', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
       metrics = [
         ['Penjualan produk', money(snapshot.profitLoss.revenue), 'Pendapatan dari penjualan hasil produksi.'],
         ['HPP produk terjual', money(snapshot.profitLoss.cogs), 'Biaya pokok produk yang sudah terjual.'],
@@ -280,7 +280,7 @@ export async function GET(request: Request) {
         ['Utang biaya overhead (mutasi periode)', money(monthly.find((a) => a.code === '2120')?.balance), 'Mutasi pencatatan overhead produksi.'],
       ];
     } else if (kind === 'jasa') {
-      selectedAccounts = monthly.filter((a) => ['4000', '5100', '6000', '6100', '7000', '1000', '1010', '1090'].includes(a.code));
+      selectedAccounts = monthly.filter((a) => ['4000', '5100', '5200', '6000', '6100', '7000', '1000', '1010', '1090'].includes(a.code));
       metrics = [
         ['Pendapatan jasa', money(snapshot.profitLoss.revenue), 'Pendapatan dari layanan yang dicatat.'],
         ['Biaya langsung jasa', money(snapshot.profitLoss.cogs), 'Biaya langsung untuk memberikan layanan.'],
@@ -288,7 +288,7 @@ export async function GET(request: Request) {
         ['Beban operasional', money(snapshot.profitLoss.operatingExpenses), 'Beban operasional yang dijurnal.'],
       ];
     } else {
-      selectedAccounts = monthly.filter((a) => ['1200', '1210', '1220', '1230', '2110', '2120', '4000', '5000', '5100', '6000', '6100', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
+      selectedAccounts = monthly.filter((a) => ['1200', '1210', '1220', '1230', '2110', '2120', '4000', '5000', '5100', '5200', '6000', '6100', '7000', '1090'].includes(a.code) || a.code.startsWith('12'));
       metrics = [
         ['Pendapatan produk dan jasa', money(snapshot.profitLoss.revenue), 'Gabungan pendapatan yang tercatat pada akun pendapatan.'],
         ['HPP dan biaya langsung', money(snapshot.profitLoss.cogs), 'Gabungan biaya langsung dan HPP sesuai jurnal.'],

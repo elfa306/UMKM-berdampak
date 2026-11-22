@@ -44,7 +44,7 @@ export async function fetchHari(start: string, end: string, source?: FetchHariSo
     if ((data ?? []).length < 1000) break;
   }
 
-  // Untuk sesi baru (modal_harian = 0), gunakan HPP dari jurnal akun 5000/5100.
+  // Untuk sesi baru (modal_harian = 0), gunakan HPP dari jurnal akun 5000/5100 dan biaya bahan produksi 5200.
   // Catatan modal_harian historis tetap dipertahankan sebagai fallback untuk data lama.
   const entryDates = new Map<string, string>();
   const entryIds: string[] = [];
@@ -73,7 +73,7 @@ export async function fetchHari(start: string, end: string, source?: FetchHariSo
       .select('entry_id,debit,credit')
       .eq('user_id', userId)
       .in('entry_id', ids)
-      .in('account_code', ['5000', '5100']);
+      .in('account_code', ['5000', '5100', '5200']);
     if (lineError) throw new Error(lineError.message);
     (data ?? []).forEach((line) => {
       const tanggal = entryDates.get(line.entry_id);
