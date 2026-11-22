@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
 import { todayISO, rupiah } from '@/lib/accounting';
 import { recordProactiveDismissed, useCashieProactive, type ProactiveAction, type ProactiveMessage } from '@/lib/cashieProactive';
-import { jawabanKategori, klasifikasiBiaya, kolomKategoriBelumAda, kolomProdukBelumAda, tandaiBiaya, tanpaKolomProduk } from '@/lib/biayaBahan';
+import { cocokkanProdukTepat, jawabanKategori, klasifikasiBiaya, kolomKategoriBelumAda, kolomProdukBelumAda, tandaiBiaya, tanpaKolomProduk } from '@/lib/biayaBahan';
 import { matchLocalExport } from '@/lib/cashieIntents';
 import { captureUserPlan, currentMemoryUserId, planAcknowledgement, planReply, setPlanStatus } from '@/lib/cashieMemory';
 import { formatJam, parseOperatingHours, saveOperatingHours, type JamOperasional } from '@/lib/jamOperasional';
@@ -25,6 +25,7 @@ type PendingTransaction = {
   qty: number;
   metode: 'tunai' | 'qris' | null;
   produk_terkait?: string;
+  produk_terjual?: string;
 };
 type PendingTransactionDelete = { type: 'transaction_delete'; transaction_id: string; description: string; amount: number; date: string; jenis: 'penjualan' | 'biaya' };
 type PendingOpeningBalanceSetup = { type: 'opening_balance_setup'; cash_amount: number; bank_amount: number };
@@ -695,15 +696,31 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       const sessionId = await ensureTodaySession(todayISO());
       if (!sessionId) throw new Error('Buka Beranda dan selesaikan saldo awal harian sebelum mencatat transaksi.');
 
-      const payload = items.map((item) => ({
-        session_id: sessionId,
-        user_id: authData.user.id,
-        jenis: item.jenis,
-        keterangan: item.keterangan.trim(),
-        jumlah: item.jumlah,
-        qty: item.qty,
-        metode: item.metode,
-      }));
+      const saleNames = items.filter((item) => item.jenis === 'penjualan' && item.produk_terjual?.trim());
+      let activeProducts: Array<{ id: string; nama: string }> = [];
+      if (saleNames.length) {
+        const { data: catalog } = await supabase.from('products').select('id,nama')
+          .eq('user_id', authData.user.id).eq('aktif', true);
+        activeProducts = (catalog ?? []) as Array<{ id: string; nama: string }>;
+      }
+      const unlinkedSaleProducts = new Set<string>();
+      const payload = items.map((item) => {
+        const row: Record<string, unknown> = {
+          session_id: sessionId,
+          user_id: authData.user.id,
+          jenis: item.jenis,
+          keterangan: item.keterangan.trim(),
+          jumlah: item.jumlah,
+          qty: item.qty,
+          metode: item.metode,
+        };
+        if (item.jenis === 'penjualan' && item.produk_terjual?.trim()) {
+          const productId = cocokkanProdukTepat(item.produk_terjual, activeProducts);
+          if (productId) row.product_id = productId;
+          else unlinkedSaleProducts.add(item.produk_terjual.trim());
+        }
+        return row;
+      });
       // Pembelian bahan untuk produk tertentu: nama produk dikirim, database mencocokkannya ke katalog (migration v23).
       const dengan = items.map((item, index) => {
         const produk = item.jenis === 'biaya' ? item.produk_terkait?.trim().slice(0, 100) : '';
@@ -723,7 +740,10 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       const total = rows.reduce((sum, row) => sum + Number(row.jumlah), 0);
       setPendingItems([]);
       const detail = rows.length === 1 ? `${rows[0].keterangan} ${rupiah(total)}` : `${rows.length} transaksi dengan total ${rupiah(total)}`;
-      const successText = `Sudah saya catat: ${detail}.`;
+      const linkNote = unlinkedSaleProducts.size
+        ? ` Catatan: penjualan ${[...unlinkedSaleProducts].join(', ')} sudah dicatat, tetapi belum terhubung ke produk karena nama di katalog tidak cocok atau masih ambigu.`
+        : '';
+      const successText = `Sudah saya catat: ${detail}.${linkNote}`;
       const successMessage: Message = { id: crypto.randomUUID(), role: 'assistant', content: successText };
       historyRef.current = [...historyRef.current, successMessage].slice(-12);
       showResponse(successText, 'success');
@@ -1203,19 +1223,25 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
     const category = classify ? jawabanKategori(text) : null;
     if (classify && category) {
       classifyAwaitRef.current = null;
-      const { error } = await supabase.rpc('set_transaction_expense_category', {
+      const { data: categoryResult, error } = await supabase.rpc('set_transaction_expense_category', {
         p_transaction_id: classify.transactionId,
         p_kategori: category.kategori,
         p_produk: category.produk,
       });
       if (error) {
         sayAnswer(/set_transaction_expense_category|function/i.test(error.message)
-          ? 'Pengelompokan biaya belum aktif di database. Jalankan supabase/migration_v21_biaya_bahan_produksi.sql dan migration_v22_biaya_bahan_per_produk.sql dulu ya.'
+          ? 'Pengelompokan biaya belum aktif di database. Jalankan migration v21, v22, dan v23 di folder supabase terlebih dahulu ya.'
           : 'Maaf, kategori biayanya belum berhasil disimpan. Coba lagi sebentar lagi.', 'error');
       } else {
         announceTransactionSaved();
+        const linked = Boolean(categoryResult && typeof categoryResult === 'object' &&
+          (categoryResult as { produk_terhubung?: boolean }).produk_terhubung);
         sayAnswer(category.kategori === 'bahan_produksi'
-          ? `Siap, saya catat sebagai biaya bahan produksi${category.produk ? ` untuk ${category.produk}` : ''}.`
+          ? category.produk
+            ? linked
+              ? `Siap, biaya bahan produksi sudah saya hubungkan ke produk ${category.produk}.`
+              : `Biaya sudah saya kelompokkan sebagai bahan produksi, tetapi belum berhasil terhubung ke produk ${category.produk}. Periksa nama produk di katalog, ya.`
+            : 'Siap, biaya bahan produksi sudah dicatat. Biaya ini belum dihubungkan ke produk tertentu.'
           : 'Siap, saya catat sebagai biaya operasional.');
       }
       setPhase('idle');
