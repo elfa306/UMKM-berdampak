@@ -6,6 +6,21 @@
 
 export type KategoriBiaya = 'bahan_produksi' | 'operasional';
 
+/** Cocokkan nama produk secara tepat. Nama tidak cocok atau duplikat yang ambigu menghasilkan null. */
+export function cocokkanProdukTepat(nama: string, produk: Array<{ id: string; nama: string }>): string | null {
+  const normalisasi = (value: string) => value.normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('id-ID');
+  const target = normalisasi(nama);
+  if (!target) return null;
+  const ids = new Set(produk.filter((item) => normalisasi(item.nama) === target).map((item) => item.id));
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+/** Hanya transaksi biaya yang benar-benar diklasifikasikan sebagai bahan produksi. */
+export function isConfirmedMaterialExpense(row: { jenis: string; kategori_biaya?: string | null }): boolean {
+  return row.jenis === 'biaya' && row.kategori_biaya === 'bahan_produksi';
+}
+
 const OPERASIONAL = /\b(listrik|pln|token|pdam|air|wifi|internet|sewa|kontrakan|gaji|upah|pulsa|elpiji|gas|pajak|transport|bensin|parkir|servis|perbaikan|utilitas|operasional|iklan|promosi)\b/;
 const BAHAN = /\b(bahan|baku|tepung|terigu|gula|telur|minyak|mentega|margarin|susu|cokelat|coklat|beras|garam|bumbu|rempah|sayur|daging|ayam|ikan|buah|kopi|teh|keju|ragi|kemasan|plastik|dus|kardus|boks|toples|stok|kulakan|belanja)\b/;
 
