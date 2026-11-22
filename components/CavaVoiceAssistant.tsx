@@ -271,6 +271,43 @@ function decodeBase64Audio(encoded: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+type CashieMood = 'idle' | 'listening' | 'thinking' | 'speaking';
+
+/** Maskot Cashie dengan gerak berbeda tiap keadaan: mendengarkan, berpikir, berbicara. */
+function CashieMascotFigure({ mood, priority }: { mood: CashieMood; priority: boolean }) {
+  const reduce = useReducedMotion();
+  const loop = (duration: number) => ({ duration, repeat: Infinity, ease: 'easeInOut' as const });
+  const animate = reduce || mood === 'idle'
+    ? { y: 0, rotate: 0, scale: 1 }
+    : mood === 'listening'
+      ? { y: [0, -2, 0], rotate: [0, -3, 0], scale: [1, 1.04, 1] }
+      : mood === 'thinking'
+        ? { y: 0, rotate: [-5, 5, -5], scale: 1 }
+        : { y: [0, -5, 0, -3, 0], rotate: 0, scale: [1, 1.03, 1, 1.02, 1] };
+  const transition = reduce || mood === 'idle' ? { duration: 0.25 } : loop(mood === 'listening' ? 1.4 : mood === 'thinking' ? 1.9 : 0.9);
+  return (
+    <motion.div
+      className="relative mb-0 h-[96px] w-[72px] shrink-0 drop-shadow-[0_8px_12px_rgba(16,58,87,0.16)]"
+      style={{ transformOrigin: '50% 100%' }}
+      animate={animate}
+      transition={transition}
+      aria-hidden="true"
+    >
+      {mood === 'listening' && !reduce && (
+        <motion.span className="absolute inset-x-2 bottom-0 top-3 rounded-full border-2 border-[#4FA37A]/60" animate={{ opacity: [0.7, 0], scale: [0.9, 1.25] }} transition={{ duration: 1.4, repeat: Infinity, ease: 'easeOut' }}/>
+      )}
+      {mood === 'thinking' && (
+        <span className="absolute -top-1 right-0 flex gap-[3px] rounded-full bg-white px-1.5 py-1 shadow">
+          {[0, 1, 2].map((dot) => (
+            <motion.span key={dot} className="h-1.5 w-1.5 rounded-full bg-[#103A57]" animate={reduce ? { opacity: 0.8 } : { opacity: [0.25, 1, 0.25] }} transition={{ duration: 1.1, repeat: Infinity, delay: dot * 0.18 }}/>
+          ))}
+        </span>
+      )}
+      <Image src="/cashie-mascot.webp" alt="" fill sizes="72px" className="object-contain object-bottom" priority={priority}/>
+    </motion.div>
+  );
+}
+
 export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible = true, onManualRecord }: Props) {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
@@ -1625,14 +1662,7 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
                 <button type="button" onClick={cancelCurrentTurn} disabled={busySaving} title={busySaving ? 'Perubahan sedang disimpan dan tidak dapat dibatalkan dari sini.' : 'Batalkan proses Cashie'} aria-label={busySaving ? 'Perubahan sedang disimpan' : 'Tutup pesan Cashie'} className="ml-auto grid h-6 w-6 place-items-center rounded-full text-[#78909A] hover:bg-[#F0F5F2] disabled:cursor-not-allowed disabled:opacity-40"><X size={13}/></button>
               </div>
             </div>
-            <motion.div
-              className="relative mb-0 h-[96px] w-[72px] shrink-0 drop-shadow-[0_8px_12px_rgba(16,58,87,0.16)]"
-              animate={isBusy || speaking ? { y: [0, -3, 0] } : { y: 0 }}
-              transition={{ duration: 1.8, repeat: isBusy || speaking ? Infinity : 0, ease: 'easeInOut' }}
-              aria-hidden="true"
-            >
-              <Image src="/cashie-mascot.webp" alt="" fill sizes="72px" className="object-contain object-bottom" priority={isActive}/>
-            </motion.div>
+            <CashieMascotFigure mood={isActive ? 'listening' : isBusy ? 'thinking' : speaking ? 'speaking' : 'idle'} priority={isActive}/>
           </motion.aside>
         )}
       </AnimatePresence>
