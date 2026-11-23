@@ -5,6 +5,7 @@ import { signAssistantActions, verifyAssistantActionToken } from '@/lib/aiAction
 import { ringkasHargaBahan, ringkasPembiayaan } from '@/lib/ringkasanAsisten.server';
 import type { ProfilUsahaDB } from '@/lib/rekomendasiProfile';
 import { ringkasBiayaPerProduk } from '@/lib/biayaBahan';
+import { extractExplicitMoneyAmounts, transactionAmountsMatchUtterance } from '@/lib/transactionAmountGuard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,6 +53,7 @@ Contoh: 'lihat laporan', 'buka laporan', atau 'tampilkan laporan' menghasilkan n
 
 ATURAN TAMBAHAN:
 - DILARANG bertanya seperti 'mau dicatat?', 'apakah saya lanjutkan?', atau 'boleh saya simpan?' di reply. Bila data sudah lengkap, langsung keluarkan action. Bila ada data yang kurang, tanyakan HANYA data yang kurang itu.
+- PENGAMAN NOMINAL TRANSAKSI: nominal harus berasal dari ucapan pengguna, bukan dari asumsi. Jika pengguna hanya berkata 'catat beli sayur', 'tadi belanja sayur', atau menyebut kuantitas/berat tanpa harga, keluarkan actions:[] dan tanyakan total uang yang dibayarkan. Jangan pernah mengisi contoh Rp50.000 atau nominal lain hanya agar schema action lengkap.
 - Jangan membuka sesi harian baru tanpa nominal modal harian yang jelas. Bila nominal belum ada, tanyakan satu kali dan tunggu jawaban.
 - Bila produk baru/ubah harga tidak menyertakan harga jual atau HPP yang dibutuhkan, tanyakan nilai yang belum ada dan jangan buat action.
 - Untuk semua action yang mengubah data (produk, produksi, profil, jurnal), isi reply singkat seperti 'Saya siapkan tindakan tersebut. Mohon periksa rincian dan konfirmasi.' Ringkasan detil akan dibuat oleh aplikasi.
@@ -67,7 +69,7 @@ ATURAN TAMBAHAN:
 
 FORMAT OUTPUT WAJIB JSON:
 {"reply":"jawaban singkat","actions":[]}
-Contoh action: {"type":"navigate","path":"/inventaris"}; {"type":"open_manual_record","mode":"keluar"}; {"type":"transaction","jenis":"biaya","keterangan":"Belanja sayur","jumlah":50000,"qty":1,"metode":null}; {"type":"transaction_delete","transaction_id":"UUID","description":"Belanja sayur","amount":50000,"date":"2026-11-14","jenis":"biaya"}; {"type":"opening_balance_setup","cash_amount":1000000,"bank_amount":500000}; {"type":"start_daily_session","date":"2026-11-14","modal_harian":100000}; {"type":"daily_modal_set","amount":100000,"date":"2026-11-14"}; {"type":"accounting_report_export","month":"2026-11"}; {"type":"product_create","nama":"Es Teh","sku":null,"kategori":"Minuman","jenis_item":"finished_good","satuan":"cup","harga":5000,"harga_pokok":2000}; {"type":"product_update","product_id":"UUID_DARI_KONTEKS","product_name":"Es Teh","harga":6000}; {"type":"product_delete","product_id":"UUID_DARI_KONTEKS","product_name":"Es Teh"}; {"type":"production_recipe_create","name":"Roti Cokelat","output_product_id":"UUID","output_product_name":"Roti Cokelat","output_qty":10,"items":[{"product_id":"UUID","product_name":"Tepung","qty":1}],"note":null}; {"type":"production_batch_complete","recipe_id":"UUID","recipe_name":"Roti Cokelat","batch_count":2,"labor_cost":0,"overhead_cost":0,"note":null}; {"type":"profile_update","changes":{"nama_usaha":"Warung Maju"}}; {"type":"accounting_entry","kind":"capital","amount":500000,"description":"Setoran modal pemilik","payment_account":"1000"}.
+Contoh action: {"type":"navigate","path":"/inventaris"}; {"type":"open_manual_record","mode":"keluar"}; Contoh transaction hanya bila pengguna benar-benar mengatakan 'beli sayur 50 ribu': {"type":"transaction","jenis":"biaya","keterangan":"Belanja sayur","jumlah":50000,"qty":1,"metode":null}; {"type":"transaction_delete","transaction_id":"UUID","description":"Belanja sayur","amount":50000,"date":"2026-11-14","jenis":"biaya"}; {"type":"opening_balance_setup","cash_amount":1000000,"bank_amount":500000}; {"type":"start_daily_session","date":"2026-11-14","modal_harian":100000}; {"type":"daily_modal_set","amount":100000,"date":"2026-11-14"}; {"type":"accounting_report_export","month":"2026-11"}; {"type":"product_create","nama":"Es Teh","sku":null,"kategori":"Minuman","jenis_item":"finished_good","satuan":"cup","harga":5000,"harga_pokok":2000}; {"type":"product_update","product_id":"UUID_DARI_KONTEKS","product_name":"Es Teh","harga":6000}; {"type":"product_delete","product_id":"UUID_DARI_KONTEKS","product_name":"Es Teh"}; {"type":"production_recipe_create","name":"Roti Cokelat","output_product_id":"UUID","output_product_name":"Roti Cokelat","output_qty":10,"items":[{"product_id":"UUID","product_name":"Tepung","qty":1}],"note":null}; {"type":"production_batch_complete","recipe_id":"UUID","recipe_name":"Roti Cokelat","batch_count":2,"labor_cost":0,"overhead_cost":0,"note":null}; {"type":"profile_update","changes":{"nama_usaha":"Warung Maju"}}; {"type":"accounting_entry","kind":"capital","amount":500000,"description":"Setoran modal pemilik","payment_account":"1000"}.
 Jangan sertakan markdown atau teks di luar JSON.`;
 
 function safeHistory(value: unknown): ChatTurn[] {
@@ -480,6 +482,24 @@ PROPOSAL AKTIF (JSON): ${JSON.stringify(currentProposal)}
         console.warn('[CAVA AI] ulang untuk action gagal:', retryError instanceof Error ? retryError.message : retryError);
       }
     }
+    if (!correctionMode) {
+      const transactionActions = result.actions.filter((action) => action.type === 'transaction');
+      if (transactionActions.length) {
+        const amounts = transactionActions.map((action) => action.jumlah);
+        if (!transactionAmountsMatchUtterance(message, amounts)) {
+          const spokenAmounts = extractExplicitMoneyAmounts(message);
+          const descriptions = [...new Set(transactionActions.map((action) => action.keterangan.trim()).filter(Boolean))];
+          const label = descriptions.length ? descriptions.slice(0, 2).join(' dan ') : 'transaksi ini';
+          result = {
+            reply: spokenAmounts.length
+              ? `Saya menangkap ada nominal, tetapi angkanya belum cocok dengan rincian ${label}. Sebutkan nominal untuk setiap item agar tidak salah catat.`
+              : `Saya bisa bantu catat ${label}, tetapi nominalnya belum disebutkan. Berapa total uang yang dibayarkan?`,
+            actions: [],
+          };
+        }
+      }
+    }
+
     const actionToken = signAssistantActions(ctx.user.id, result.actions);
     return NextResponse.json({ ...result, provider, actionToken }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {

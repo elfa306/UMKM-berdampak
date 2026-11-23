@@ -4,9 +4,39 @@ import { klasifikasiBiaya, klasifikasiPeriodeBiaya, isBiayaBulanan, jawabanKateg
 import { summarize } from '../lib/accounting';
 import { extractPlan, planReply } from '../lib/cashieMemory';
 import { matchLocalExport } from '../lib/cashieIntents';
+import { extractExplicitMoneyAmounts, transactionAmountsMatchUtterance } from '../lib/transactionAmountGuard';
 
 let pass = 0, fail = 0;
 const t = (name: string, fn: () => void) => { try { fn(); pass++; } catch (e) { fail++; console.log('GAGAL:', name, '\n  ', (e as Error).message.split('\n')[0]); } };
+
+// Pengaman nominal transaksi: angka hanya boleh dipakai bila benar-benar diucapkan sebagai uang.
+t('tanpa nominal tidak bisa menghasilkan transaction amount', () => {
+  assert.deepEqual(extractExplicitMoneyAmounts('catat pembelian sayur'), []);
+  assert.equal(transactionAmountsMatchUtterance('catat pembelian sayur', [50000]), false);
+});
+t('kuantitas berat bukan nominal uang', () => {
+  assert.deepEqual(extractExplicitMoneyAmounts('catat beli sayur 2 kg dan wortel 3 ikat'), []);
+});
+t('nominal format rupiah dan ribuan dikenali', () => {
+  assert.deepEqual(extractExplicitMoneyAmounts('catat beli sayur Rp50.000'), [50000]);
+  assert.deepEqual(extractExplicitMoneyAmounts('catat belanja Rp 125.000'), [125000]);
+  assert.deepEqual(extractExplicitMoneyAmounts('catat sayur 50 ribu'), [50000]);
+  assert.deepEqual(extractExplicitMoneyAmounts('catat sayur 50rb'), [50000]);
+  assert.deepEqual(extractExplicitMoneyAmounts('catat sayur 50k'), [50000]);
+});
+t('nominal dalam kata bahasa Indonesia dikenali', () => {
+  assert.deepEqual(extractExplicitMoneyAmounts('beli sayur lima puluh ribu'), [50000]);
+  assert.deepEqual(extractExplicitMoneyAmounts('beli sayur seratus lima puluh ribu'), [150000]);
+  assert.deepEqual(extractExplicitMoneyAmounts('beli sayur dua ratus ribu'), [200000]);
+  assert.deepEqual(extractExplicitMoneyAmounts('beli bahan satu setengah juta'), [1500000]);
+});
+t('nominal numerik harus cocok persis dengan setiap action', () => {
+  assert.equal(transactionAmountsMatchUtterance('beli sayur 50 ribu', [50000]), true);
+  assert.equal(transactionAmountsMatchUtterance('beli sayur 50 ribu', [30000]), false);
+  assert.equal(transactionAmountsMatchUtterance('beli sayur 50 ribu dan cabai 20 ribu', [50000, 20000]), true);
+  assert.equal(transactionAmountsMatchUtterance('beli sayur 50 ribu', [50000, 50000]), false);
+  assert.equal(transactionAmountsMatchUtterance('beli sayur 2 kg seharga 50 ribu', [50000]), true);
+});
 
 // Klasifikasi biaya
 t('tepung = bahan', () => assert.equal(klasifikasiBiaya('beli tepung dan gula'), 'bahan_produksi'));
