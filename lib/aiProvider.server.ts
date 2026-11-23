@@ -776,7 +776,8 @@ function buildSpeechKeyterms(context: SpeechContext): string[] {
     'pengeluaran', 'pembelian', 'modal', 'stok', 'persediaan', 'bahan baku',
     'biaya operasional', 'harga pokok', 'harga jual', 'kas harian',
   ];
-  const candidates = [...standardTerms, context.businessName, ...context.productNames];
+  // Dahulukan kosakata spesifik pemilik sebelum istilah umum CAVA.
+  const candidates = [context.businessName, ...context.productNames, ...standardTerms];
   const seen = new Set<string>();
   const keyterms: string[] = [];
 
@@ -849,9 +850,9 @@ export async function transcribeWithAssemblyAI(
   let transcriptId: string | null = null;
 
   try {
-    // Upload file mentah (bukan multipart) sesuai kontrak REST API AssemblyAI.
-    const [audioBytes, context] = await Promise.all([audio.arrayBuffer(), Promise.resolve(speechContext)]);
-    const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
+    // Mulai baca audio dan muat konteks bersamaan. Upload dimulai begitu
+    // bytes siap, tanpa menunggu query katalog Supabase selesai.
+    const uploadPromise = audio.arrayBuffer().then((audioBytes) => fetch('https://api.assemblyai.com/v2/upload', {
       method: 'POST',
       headers: {
         authorization: apiKey,
@@ -859,7 +860,11 @@ export async function transcribeWithAssemblyAI(
       },
       body: audioBytes,
       signal: requestSignal,
-    });
+    }));
+    const [uploadResponse, context] = await Promise.all([
+      uploadPromise,
+      Promise.resolve(speechContext),
+    ]);
     if (!uploadResponse.ok) throw await assemblyError(uploadResponse, 'upload');
 
     const uploadData = await uploadResponse.json() as { upload_url?: string };
