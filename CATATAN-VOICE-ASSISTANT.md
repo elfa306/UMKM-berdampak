@@ -7,7 +7,7 @@
 - Tidak ada ruang chat atau riwayat percakapan yang dibuka. CAVA langsung menjawab melalui suara dan kartu respons kecil di atas navigasi.
 - Jawaban umum dibuat singkat, langsung pada inti, dan memakai gaya bahasa Indonesia sehari-hari.
 - ElevenLabs TTS menghasilkan jawaban suara dengan model default `eleven_v4`. Endpoint menambahkan Audio Tags otomatis sesuai konteks: `[curious]` untuk konfirmasi, `[happy]` untuk keberhasilan, `[calm, reassuring]` untuk kesalahan, dan `[warm, conversational]` untuk jawaban umum. Tag hanya dipakai pada audio dan tidak muncul pada transkrip. Pilih Voice ID dengan pelafalan bahasa Indonesia yang cocok. Suara otomatis dapat dimatikan dan jawaban terakhir bisa diputar ulang.
-- Transkripsi memakai Groq Whisper sebagai provider utama dan Gemini sebagai fallback. Chat memakai Groq sebagai provider utama dan Gemini sebagai fallback saat gangguan sementara.
+- Transkripsi suara memakai AssemblyAI Universal-2 dengan deteksi bahasa otomatis, code-switching, dan keyterms dari katalog usaha. Chat tetap memakai Groq sebagai provider utama dan Gemini sebagai fallback saat gangguan sementara.
 - AI membaca konteks usaha milik akun yang sedang login: profil, transaksi 30 hari, ringkasan jurnal/saldo bila tersedia, dan katalog produk.
 - Tindakan pencatatan transaksi harus dikonfirmasi terlebih dahulu lewat suara atau tombol cadangan di kartu respons.
 - Ketuk singkat tombol V membuka pencatatan manual; tombol `+` tambahan dihilangkan. Untuk kontrol aksi Cashie, jalankan migration v19 seperti dijelaskan pada bagian akhir catatan.

@@ -7,6 +7,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { Check, LoaderCircle, Volume2, VolumeX, X } from 'lucide-react';
 import { CavaVMark } from './CavaLogo';
 import { supabase } from '@/lib/supabase';
+import { analyzeAudioQuality } from '@/lib/audioQuality.client';
 import { announceTransactionSaved, ensureTodaySession, type QuickSavedRow } from '@/lib/quickSession';
 import { todayISO, rupiah } from '@/lib/accounting';
 import { recordProactiveDismissed, useCashieProactive, type ProactiveAction, type ProactiveMessage } from '@/lib/cashieProactive';
@@ -1288,6 +1289,9 @@ export default function CavaVoiceAssistant({ variant = 'mobile', controlsVisible
       const form = new FormData();
       const extension = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
       form.append('audio', blob, `cava-voice.${extension}`);
+      // Ukur kualitas rekaman sebagai metadata; audio asli tetap dikirim tanpa filter agresif.
+      const audioQuality = await analyzeAudioQuality(blob);
+      if (audioQuality) form.append('audio_quality', JSON.stringify(audioQuality));
       const result = await fetch('/api/ai/transcribe', {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
         credentials: 'same-origin', cache: 'no-store', body: form, signal: controller.signal,

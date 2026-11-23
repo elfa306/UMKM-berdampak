@@ -2,6 +2,9 @@ export type ProviderName = 'groq' | 'gemini' | 'openrouter';
 export type ChatRole = 'user' | 'assistant';
 export type ChatTurn = { role: ChatRole; content: string };
 
+export type SpeechContext = { businessName: string; productNames: string[] };
+export type SpeechTranscriptionProvider = 'assemblyai';
+
 export type ProposedTransaction = {
   type: 'transaction';
   jenis: 'penjualan' | 'biaya';
@@ -68,9 +71,7 @@ class ProviderError extends Error {
 const CHAT_BUDGET_MS = 26_000;
 const CHAT_HEDGE_DELAY_MS = 1_800;
 const CHAT_PROVIDER_TIMEOUT_MS = 18_000;
-const TRANSCRIBE_BUDGET_MS = 50_000;
-const GROQ_TRANSCRIBE_MS = 12_000;
-const MIN_FALLBACK_MS = 4_000;
+const TRANSCRIBE_BUDGET_MS = 45_000;
 
 export const TIMEOUT_MESSAGE = 'Layanan AI sedang lambat. Coba tahan tombol V dan ucapkan lagi.';
 
@@ -104,13 +105,6 @@ async function timed<T>(label: string, task: () => Promise<T>, signal?: AbortSig
 function providerRequestSignal(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   return parent ? AbortSignal.any([parent, timeoutSignal]) : timeoutSignal;
-}
-
-function canFallback(error: unknown): boolean {
-  if (!(error instanceof ProviderError)) return true;
-  // 413 = permintaan melebihi batas token Groq; Gemini punya jendela konteks jauh lebih besar.
-  // 400 = Groq menolak isi permintaan (mis. JSON tidak valid, model/format tidak diterima); Gemini bisa tetap menjawab.
-  return error.status === 400 || error.status === 408 || error.status === 413 || error.status === 429 || (error.status !== undefined && error.status >= 500);
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> {
@@ -764,73 +758,192 @@ export async function generateAssistantReply(
   };
 }
 
-async function groqTranscribe(audio: File, timeoutMs: number, signal?: AbortSignal): Promise<string> {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) throw new ProviderError('GROQ_API_KEY belum diatur.');
-  const form = new FormData();
-  form.append('file', audio, audio.name || 'cava-voice.webm');
-  form.append('model', process.env.GROQ_TRANSCRIPTION_MODEL || 'whisper-large-v3-turbo');
-  form.append('language', 'id');
-  form.append('response_format', 'json');
+type AssemblyAiWord = { text?: string; confidence?: number | null };
+type AssemblyAiTranscript = {
+  id?: string;
+  status?: 'queued' | 'processing' | 'completed' | 'error' | string;
+  text?: string | null;
+  error?: string | null;
+  words?: AssemblyAiWord[] | null;
+  confidence?: number | null;
+  language_code?: string | null;
+  speech_model_used?: string | null;
+};
 
-  const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}` },
-    body: form,
-    signal: providerRequestSignal(signal, timeoutMs),
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    console.warn(`[CAVA AI] Groq transkripsi ${response.status} detail:`, detail.slice(0, 400), `| file: ${audio.type || '?'} ${audio.size}B`);
-    throw new ProviderError(`Transkripsi Groq gagal (HTTP ${response.status}).`, response.status);
+function buildSpeechKeyterms(context: SpeechContext): string[] {
+  const standardTerms = [
+    'CAVA', 'Cashie', 'QRIS', 'rupiah', 'tunai', 'transfer', 'penjualan',
+    'pengeluaran', 'pembelian', 'modal', 'stok', 'persediaan', 'bahan baku',
+    'biaya operasional', 'harga pokok', 'harga jual', 'kas harian',
+  ];
+  const candidates = [...standardTerms, context.businessName, ...context.productNames];
+  const seen = new Set<string>();
+  const keyterms: string[] = [];
+
+  for (const candidate of candidates) {
+    const term = String(candidate ?? '').trim().replace(/\s+/g, ' ');
+    const normalized = term.toLocaleLowerCase('id-ID');
+    if (!term || term.split(' ').length > 6 || normalized.length < 2 || seen.has(normalized)) continue;
+    seen.add(normalized);
+    keyterms.push(term);
+    if (keyterms.length >= 200) break;
   }
-  const data = await response.json();
-  const text = typeof data?.text === 'string' ? data.text.trim() : '';
-  if (!text) throw new Error('Suara belum berhasil dikenali. Coba bicara sedikit lebih jelas.');
-  return text;
+  return keyterms;
 }
 
-async function geminiTranscribe(audio: File, timeoutMs: number, signal?: AbortSignal): Promise<string> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new ProviderError('GEMINI_API_KEY belum diatur.');
-  const model = process.env.GEMINI_TRANSCRIPTION_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-  const bytes = Buffer.from(await audio.arrayBuffer());
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({
-      contents: [{ parts: [
-        { text: 'Transkripsikan audio ini secara akurat dalam bahasa Indonesia. Pertahankan angka, nominal rupiah, nama produk, dan maksud pembicara. Balas hanya teks transkripsinya, tanpa penjelasan tambahan.' },
-        { inlineData: { mimeType: audio.type || 'audio/webm', data: bytes.toString('base64') } },
-      ] }],
-      generationConfig: { temperature: 0 },
-    }),
-    signal: providerRequestSignal(signal, timeoutMs),
-  });
-  if (!response.ok) throw new ProviderError(`Transkripsi Gemini gagal (HTTP ${response.status}).`, response.status);
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? '').join('').trim();
-  if (typeof text !== 'string' || !text) throw new Error('Gemini belum bisa mengenali audio.');
-  return text;
+function assemblyRequestSignal(parent: AbortSignal | undefined): AbortSignal {
+  const timeout = AbortSignal.timeout(TRANSCRIBE_BUDGET_MS);
+  return parent ? AbortSignal.any([parent, timeout]) : timeout;
 }
 
-export async function transcribeWithFallback(audio: File, signal?: AbortSignal): Promise<{ transcript: string; provider: ProviderName }> {
-  let groqError: unknown;
-  const deadline = Date.now() + TRANSCRIBE_BUDGET_MS;
-  const hasGemini = Boolean(process.env.GEMINI_API_KEY);
-  if (process.env.GROQ_API_KEY) {
-    try {
-      const groqMs = hasGemini ? GROQ_TRANSCRIBE_MS : TRANSCRIBE_BUDGET_MS;
-      return { transcript: await timed('transkripsi groq', () => groqTranscribe(audio, groqMs, signal), signal), provider: 'groq' };
-    } catch (error) {
-      groqError = error;
-      if (signal?.aborted || !canFallback(error)) throw error;
+async function assemblyError(response: Response, stage: string): Promise<ProviderError> {
+  if (response.status === 401 || response.status === 403) {
+    return new ProviderError('API key AssemblyAI tidak valid atau belum memiliki akses transkripsi.', response.status);
+  }
+  if (response.status === 429) {
+    return new ProviderError('Layanan transkripsi sedang mencapai batas pemakaian. Coba lagi beberapa saat.', 429);
+  }
+  if (response.status === 413) {
+    return new ProviderError('Ukuran rekaman terlalu besar untuk layanan transkripsi.', 413);
+  }
+  const detail = await response.text().catch(() => '');
+  console.warn(`[CAVA ASR] AssemblyAI ${stage} HTTP ${response.status}:`, detail.slice(0, 240));
+  return new ProviderError(`Layanan AssemblyAI gagal memproses suara (HTTP ${response.status}).`, response.status);
+}
+
+async function deleteAssemblyTranscript(transcriptId: string, apiKey: string): Promise<void> {
+  try {
+    const response = await fetch(`https://api.assemblyai.com/v2/transcript/${encodeURIComponent(transcriptId)}`, {
+      method: 'DELETE',
+      headers: { authorization: apiKey },
+      signal: AbortSignal.timeout(2_500),
+    });
+    if (!response.ok) console.warn(`[CAVA ASR] penghapusan transkrip AssemblyAI gagal (HTTP ${response.status}).`);
+  } catch {
+    console.warn('[CAVA ASR] permintaan penghapusan transkrip AssemblyAI tidak selesai.');
+  }
+}
+
+/**
+ * Speech-to-text AssemblyAI Universal-2.
+ * Universal-2 dipilih karena cakupan bahasa Indonesia/Jawa; opsi code-switching
+ * diaktifkan untuk percakapan yang mencampur kedua bahasa. Tidak ada fallback
+ * transkripsi ke Groq atau Gemini.
+ */
+export async function transcribeWithAssemblyAI(
+  audio: File,
+  speechContext: SpeechContext | Promise<SpeechContext>,
+  signal?: AbortSignal,
+): Promise<{
+  transcript: string;
+  provider: SpeechTranscriptionProvider;
+  model: string | null;
+  languageCode: string | null;
+  confidence: number | null;
+  lowConfidenceWordCount: number;
+}> {
+  const apiKey = process.env.ASSEMBLYAI_API_KEY;
+  if (!apiKey) throw new ProviderError('ASSEMBLYAI_API_KEY belum diatur di environment server.');
+
+  const requestSignal = assemblyRequestSignal(signal);
+  let transcriptId: string | null = null;
+
+  try {
+    // Upload file mentah (bukan multipart) sesuai kontrak REST API AssemblyAI.
+    const [audioBytes, context] = await Promise.all([audio.arrayBuffer(), Promise.resolve(speechContext)]);
+    const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
+      method: 'POST',
+      headers: {
+        authorization: apiKey,
+        'content-type': audio.type || 'application/octet-stream',
+      },
+      body: audioBytes,
+      signal: requestSignal,
+    });
+    if (!uploadResponse.ok) throw await assemblyError(uploadResponse, 'upload');
+
+    const uploadData = await uploadResponse.json() as { upload_url?: string };
+    if (typeof uploadData.upload_url !== 'string' || !uploadData.upload_url) {
+      throw new ProviderError('AssemblyAI tidak mengembalikan lokasi audio yang valid.');
     }
+
+    const keyterms = buildSpeechKeyterms(context);
+    const submitResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
+      method: 'POST',
+      headers: { authorization: apiKey, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        audio_url: uploadData.upload_url,
+        speech_models: ['universal-2'],
+        language_detection: true,
+        language_detection_options: { code_switching: true },
+        keyterms_prompt: keyterms,
+        punctuate: true,
+        format_text: true,
+        disfluencies: false,
+      }),
+      signal: requestSignal,
+    });
+    if (!submitResponse.ok) throw await assemblyError(submitResponse, 'submit');
+
+    const submitData = await submitResponse.json() as { id?: string };
+    if (typeof submitData.id !== 'string' || !submitData.id) {
+      throw new ProviderError('AssemblyAI tidak mengembalikan ID transkripsi.');
+    }
+    transcriptId = submitData.id;
+
+    const deadline = Date.now() + 39_000;
+    let completed: AssemblyAiTranscript | null = null;
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      const pollResponse = await fetch(
+        `https://api.assemblyai.com/v2/transcript/${encodeURIComponent(transcriptId)}`,
+        { headers: { authorization: apiKey }, signal: requestSignal },
+      );
+      if (!pollResponse.ok) throw await assemblyError(pollResponse, 'poll');
+      const pollData = await pollResponse.json() as AssemblyAiTranscript;
+
+      if (pollData.status === 'completed') {
+        completed = pollData;
+        break;
+      }
+      if (pollData.status === 'error') {
+        console.warn('[CAVA ASR] AssemblyAI gagal mengenali rekaman:', String(pollData.error ?? '').slice(0, 240));
+        throw new ProviderError('Suara belum berhasil dikenali. Coba bicara sedikit lebih jelas atau rekam ulang.');
+      }
+    }
+
+    if (!completed) throw new ProviderError(TIMEOUT_MESSAGE, 408);
+    const transcript = typeof completed.text === 'string' ? completed.text.trim() : '';
+    if (!transcript) throw new ProviderError('Ucapan belum terdengar jelas. Silakan coba rekam ulang.');
+
+    const wordConfidences = (Array.isArray(completed.words) ? completed.words : [])
+      .map((word) => word.confidence)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const confidence = typeof completed.confidence === 'number' && Number.isFinite(completed.confidence)
+      ? completed.confidence
+      : wordConfidences.length
+        ? wordConfidences.reduce((sum, value) => sum + value, 0) / wordConfidences.length
+        : null;
+
+    return {
+      transcript,
+      provider: 'assemblyai',
+      model: typeof completed.speech_model_used === 'string' ? completed.speech_model_used : 'universal-2',
+      languageCode: typeof completed.language_code === 'string' ? completed.language_code : null,
+      confidence,
+      lowConfidenceWordCount: wordConfidences.filter((value) => value < 0.65).length,
+    };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error instanceof ProviderError) throw error;
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw new ProviderError(TIMEOUT_MESSAGE, 408);
+    }
+    throw error;
+  } finally {
+    // Hapus objek transkrip setelah hasil dibaca; jika panggilan penghapusan gagal,
+    // data tidak ditampilkan dan kegagalan cleanup tidak mengubah hasil ASR.
+    if (transcriptId) await deleteAssemblyTranscript(transcriptId, apiKey);
   }
-  if (hasGemini) {
-    const remaining = deadline - Date.now();
-    if (remaining < MIN_FALLBACK_MS) throw new ProviderError(TIMEOUT_MESSAGE, 408);
-    return { transcript: await timed('transkripsi gemini', () => geminiTranscribe(audio, remaining, signal), signal), provider: 'gemini' };
-  }
-  throw groqError instanceof Error ? groqError : new Error('Atur GROQ_API_KEY atau GEMINI_API_KEY untuk mengaktifkan transkripsi.');
 }

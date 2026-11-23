@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getOwnerContext, isSafeSameOrigin, type OwnerContext } from '@/lib/ownerApi.server';
-import { publicAiError, transcribeWithFallback } from '@/lib/aiProvider.server';
+import { publicAiError, transcribeWithAssemblyAI, type SpeechContext } from '@/lib/aiProvider.server';
 import { correctTranscript } from '@/lib/transcriptCorrection';
 
 export const runtime = 'nodejs';
@@ -9,9 +9,34 @@ export const maxDuration = 60;
 
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 
-// Referensi koreksi transkrip mencakup nama usaha dan produk aktif pemilik.
-// Kegagalan membaca salah satu sumber tidak boleh menggagalkan transkripsi.
-async function loadSpeechNames(ctx: OwnerContext): Promise<string[]> {
+type AudioQualityInput = {
+  durationMs: number;
+  rms: number;
+  peak: number;
+  silenceRatio: number;
+  clippingRatio: number;
+};
+
+// Hanya metadata numerik yang diterima; tidak menyimpan audio atau isi transkrip ke log.
+function parseAudioQuality(value: FormDataEntryValue | null): AudioQualityInput | null {
+  if (typeof value !== 'string' || value.length > 500) return null;
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const keys = ['durationMs', 'rms', 'peak', 'silenceRatio', 'clippingRatio'] as const;
+    if (!parsed || typeof parsed !== 'object' || keys.some((key) => typeof parsed[key] !== 'number' || !Number.isFinite(parsed[key]))) return null;
+    const quality = parsed as unknown as AudioQualityInput;
+    if (quality.durationMs < 0 || quality.durationMs > 60_000) return null;
+    if (quality.rms < 0 || quality.rms > 1 || quality.peak < 0 || quality.peak > 1) return null;
+    if (quality.silenceRatio < 0 || quality.silenceRatio > 1 || quality.clippingRatio < 0 || quality.clippingRatio > 1) return null;
+    return quality;
+  } catch {
+    return null;
+  }
+}
+
+// Data usaha diambil khusus dari akun yang sedang login. Kegagalan query
+// katalog tidak boleh menggagalkan transkripsi suara.
+async function loadSpeechContext(ctx: OwnerContext): Promise<SpeechContext> {
   try {
     const [productsResult, profileResult] = await Promise.all([
       ctx.userClient.from('products').select('nama').eq('user_id', ctx.user.id).eq('aktif', true).limit(200),
@@ -22,9 +47,9 @@ async function loadSpeechNames(ctx: OwnerContext): Promise<string[]> {
     const businessName = !profileResult.error
       ? String((profileResult.data as { nama_usaha?: string | null } | null)?.nama_usaha ?? '').trim()
       : '';
-    return Array.from(new Set([...(businessName ? [businessName] : []), ...productNames]));
+    return { businessName, productNames: Array.from(new Set(productNames)) };
   } catch {
-    return [];
+    return { businessName: '', productNames: [] };
   }
 }
 
@@ -40,14 +65,35 @@ export async function POST(request: Request) {
     if (audio.size < 1200) return NextResponse.json({ error: 'Rekaman terlalu singkat. Tahan tombol V sedikit lebih lama.' }, { status: 400 });
     if (audio.size > MAX_AUDIO_BYTES) return NextResponse.json({ error: 'Rekaman terlalu besar. Coba ucapkan perintah dengan durasi lebih singkat.' }, { status: 413 });
 
-    // Ambil katalog bersamaan dengan transkripsi agar tidak menambah latensi.
-    const namesPromise = loadSpeechNames(ctx);
-    const { transcript: rawTranscript, provider } = await transcribeWithFallback(audio, request.signal);
-    const { text: transcript, changes } = correctTranscript(rawTranscript, await namesPromise);
-    if (changes.length) console.info(`[CAVA AI] autocorrect transkrip: ${changes.length} koreksi (${changes.map((change) => change.reason).join(', ')})`);
+    const audioQuality = parseAudioQuality(form.get('audio_quality'));
+    if (audioQuality) {
+      console.info(
+        `[CAVA ASR] kualitas audio: durasi=${audioQuality.durationMs}ms rms=${audioQuality.rms} peak=${audioQuality.peak} hening=${audioQuality.silenceRatio} clipping=${audioQuality.clippingRatio}`,
+      );
+    }
+
+    // Upload audio ke AssemblyAI berjalan bersamaan dengan pembacaan katalog Supabase.
+    const speechContextPromise = loadSpeechContext(ctx);
+    const [speechContext, asr] = await Promise.all([
+      speechContextPromise,
+      transcribeWithAssemblyAI(audio, speechContextPromise, request.signal),
+    ]);
+
+    const { text: transcript, changes } = correctTranscript(asr.transcript, speechContext.productNames);
+    if (changes.length) console.info(`[CAVA ASR] koreksi katalog: ${changes.length} koreksi`);
 
     return NextResponse.json(
-      { transcript, provider, ...(changes.length ? { rawTranscript, corrections: changes } : {}) },
+      {
+        transcript,
+        provider: asr.provider,
+        asr: {
+          model: asr.model,
+          languageCode: asr.languageCode,
+          confidence: asr.confidence,
+          lowConfidenceWordCount: asr.lowConfidenceWordCount,
+        },
+        ...(changes.length ? { rawTranscript: asr.transcript, corrections: changes } : {}),
+      },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (error) {
